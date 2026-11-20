@@ -692,6 +692,7 @@ def test_strip_shows_tracking_k_of_n(window, tmp_path, monkeypatch):
     try:
         window._on_progress(1, 5)
         assert window._steps.steps_text()[3] == "Tracking 2 of 5"
+        assert window._overall_bar.value() == 2
     finally:
         window._teardown_thread()
     assert window._steps.steps_text()[3] == "Track"

@@ -390,7 +390,7 @@ class PoseBatchWindow(QMainWindow):
         self._log.setObjectName("LogPane")
         self._log.setReadOnly(True)
         self._log.setPlaceholderText("Progress will appear here.")
-        self._log.setMaximumHeight(160)
+        self._log.setMaximumHeight(110)
         self._log.setVisible(False)
         self._log_toggle = QPushButton()
         set_button_role(self._log_toggle, "ghost")
@@ -1519,7 +1519,8 @@ class PoseBatchWindow(QMainWindow):
             if 0 <= index < len(self._videos):
                 self._video_label.setText(self._videos[index].name)
         self._overall_bar.setRange(0, total)
-        self._overall_bar.setValue(index)
+        # The batch counts the video in flight ("2 of 5", as the step strip does).
+        self._overall_bar.setValue(index + 1 if self._thread is not None else index)
 
     def _on_video_progress(self, done: int, total: int) -> None:
         # total == 0 means OpenCV couldn't report a frame count: show a busy bar.
