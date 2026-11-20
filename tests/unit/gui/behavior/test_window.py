@@ -1,6 +1,6 @@
 """Smoke tests for the top-level Behavior Analysis window.
 
-Just enough to prove the window builds its three tabs and can default
+Just enough to prove the window builds its step tabs and can default
 its project directory from config — the tab bodies (Annotate/Train/Apply)
 get their own focused tests once the window exists.
 """
@@ -2803,7 +2803,7 @@ def test_summary_names_non_default_options(qtbot):
     tab = TrainTab()
     qtbot.addWidget(tab)
     text = tab._summary.text
-    assert text().startswith("Random forest · 1 s window")
+    assert text().startswith("Random forest · 1 s window at 30 fps")
     assert "mirror" not in text().lower()
 
     tab._classifier_combo.setCurrentText("LightGBM")
@@ -2812,7 +2812,7 @@ def test_summary_names_non_default_options(qtbot):
     tab._class_weight_combo.setCurrentIndex(tab._class_weight_combo.findData("balanced"))
     tab._fps_spin.setValue(25.0)
     lowered = text().lower()
-    assert text().startswith("LightGBM · 0.6 s window")
+    assert text().startswith("LightGBM · 0.72 s window")
     assert "mirror augment on" in lowered
     assert "balanced" in lowered
     assert "25 fps" in lowered

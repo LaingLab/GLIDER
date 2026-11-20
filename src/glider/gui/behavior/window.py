@@ -57,7 +57,6 @@ from glider.gui.styles import restyle
 from glider.gui.widgets.tool_ui import (
     GUTTER,
     Card,
-    RunRail,
     ToolHeader,
     apply_tool_theme,
     attach_empty_state,
@@ -474,25 +473,6 @@ class BehaviorAnalysisWindow(QMainWindow):
         if shown:
             self.set_step_done(2, True)
             self.tabs.setCurrentWidget(self.review_tab)
-
-
-def _workspace(parent: QWidget, rail: RunRail, *, rail_width: int = 380) -> QVBoxLayout:
-    """Lay a tab out as ``[ scrolling config column | pinned run rail ]``.
-
-    Returns the layout to add cards to. The rail keeps the primary action and
-    its output on screen no matter how far the configuration scrolls, which is
-    the whole point of the two-column shape.
-    """
-    outer = QHBoxLayout(parent)
-    outer.setContentsMargins(GUTTER, GUTTER, GUTTER, GUTTER)
-    outer.setSpacing(GUTTER)
-
-    area, column = scroll_column()
-    outer.addWidget(area, 1)
-
-    rail.setFixedWidth(rail_width)
-    outer.addWidget(rail)
-    return column
 
 
 class AnnotateTab(QWidget):
@@ -1567,7 +1547,9 @@ class TrainTab(QWidget):
     def _update_summary(self, *_args) -> None:
         """Name the kind, window and every non-default option in force."""
         frames = self._window_spin.value()
-        parts = [self._classifier_combo.currentText(), f"{frames / 30.0:g} s window"]
+        fps = self._fps_spin.value()
+        secs = f"{frames / (fps or 30):g} s window"
+        parts = [self._classifier_combo.currentText(), secs if fps else f"{secs} at 30 fps"]
         if self._class_weight_combo.currentData() is not None:
             parts.append(f"{self._class_weight_combo.currentText()} class weight")
         if self._background_check.isChecked():
@@ -1937,6 +1919,8 @@ class ApplyTab(QWidget):
         self._yolo_path: Path | None = None
         self._videos: list[Path] = []
         self._output_dir: Path | None = None
+        self._scored_dir: Path | None = None  # output folder of the last run
+        self._scored_single = 0  # last run's single-animal results
         self._calibration_master: Path | None = None
         self._cohort_path: Path | None = None
         self._cohort_thread: QThread | None = None
@@ -2237,12 +2221,12 @@ class ApplyTab(QWidget):
         from PyQt6.QtCore import QUrl
         from PyQt6.QtGui import QDesktopServices
 
-        if self._output_dir is not None:
-            QDesktopServices.openUrl(QUrl.fromLocalFile(str(self._output_dir)))
+        if self._scored_dir is not None:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(self._scored_dir)))
 
     def _on_open_in_review(self) -> None:
-        if self._output_dir is not None:
-            self.open_in_session_review.emit(str(self._output_dir))
+        if self._scored_dir is not None:
+            self.open_in_session_review.emit(str(self._scored_dir))
 
     def _on_choose_model(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -2522,7 +2506,8 @@ class ApplyTab(QWidget):
         set_text_role(self._pose_match_label, "warning")
         self._pose_match_label.setText(
             f"⚠ Matched {len(matched)} of {len(self._videos)} in {where}. "
-            f"No pose CSV for: {names}{more} — those would be tracked from scratch."
+            f"No pose CSV for: {names}{more} — those would be tracked from scratch "
+            "(or point Options ▸ Pose CSV folder at the tracked CSVs)."
         )
         self._refresh_blocker()
 
@@ -2569,13 +2554,13 @@ class ApplyTab(QWidget):
             if not self._speed_group.isChecked():
                 return (
                     "Choose a model bundle — or, to score freezing and darting "
-                    "with no model at all, turn on the freeze/dart speed axis "
-                    "and set its thresholds."
+                    "with no model at all, turn on the speed axis "
+                    "(Options ▸ Freeze / dart) and set its thresholds."
                 )
             if not (self._score_freezing.isChecked() or self._score_darting.isChecked()):
                 return (
                     "A run with no model bundle scores the speed axis, so tick "
-                    "freezing, darting, or both."
+                    "freezing, darting, or both (Options ▸ Freeze / dart)."
                 )
             if self._render_video.isChecked():
                 return (
@@ -2592,14 +2577,15 @@ class ApplyTab(QWidget):
             # never told where its cut-offs live.
             return (
                 "Cohort mode takes its cut-offs from a file — choose or compute "
-                "one, or switch the threshold mode."
+                "one, or switch the threshold mode (Options ▸ Freeze / dart)."
             )
         untracked = self._needs_tracking()
         if self._yolo_path is None and untracked:
             names = ", ".join(v.name for v in untracked[:4])
             more = f" (+{len(untracked) - 4} more)" if len(untracked) > 4 else ""
             return (
-                f"Choose YOLO weights: {len(untracked)} video(s) have no pose CSV "
+                f"Choose YOLO weights, or point Options ▸ Pose CSV folder at the "
+                f"tracked CSVs — {len(untracked)} video(s) have no pose CSV "
                 f"to score and would have to be tracked — {names}{more}."
             )
         return None
@@ -2638,6 +2624,8 @@ class ApplyTab(QWidget):
         self._results_card.setVisible(True)
         self._banner.setVisible(False)
         self._scored = 0
+        self._scored_single = 0
+        self._scored_dir = self._output_dir
         self._queue = list(self._videos)
         self._run_total = len(self._queue)
         self._run_btn.setEnabled(False)
@@ -3196,6 +3184,8 @@ class ApplyTab(QWidget):
         self._results.append(
             f"Pooling speed from {len(csvs)} session(s) over {window}… this takes a minute or two."
         )
+        self._results_card.setVisible(True)
+        self._footer.set_message("Computing cohort thresholds…")
         self._progress.setVisible(True)
         self._progress.setRange(0, len(csvs))
         self._progress.setValue(0)
@@ -3237,6 +3227,7 @@ class ApplyTab(QWidget):
     def _end_cohort_run(self) -> None:
         self._progress.setVisible(False)
         self._run_btn.setEnabled(True)
+        self._refresh_blocker()
 
     def _on_cohort_done(self, thresholds, path) -> None:
         self._end_cohort_run()
@@ -3404,6 +3395,7 @@ class ApplyTab(QWidget):
             self._scored += 1
             self._run_next()
             return
+        self._scored_single += 1
         n_frames = getattr(getattr(result, "ethogram", None), "__len__", lambda: None)()
         if n_frames is not None:
             lines.append(f"  frames classified: {n_frames}")
@@ -3432,11 +3424,19 @@ class ApplyTab(QWidget):
         self._progress.setVisible(False)
         self._run_btn.setEnabled(True)
         n, total = self._scored, self._run_total
-        if n and self._output_dir is not None:
+        if n and self._scored_dir is not None:
+            # Multi-animal ethograms go beside each video, not under the
+            # output folder, and Session Review cannot discover them.
+            where = (
+                f"written to {_short_path(self._scored_dir)}"
+                if self._scored_single
+                else "written beside each video in <video>_animals/"
+            )
             self._banner_text.setText(
                 f"\u2713 Scored {n} video{'' if n == 1 else 's'}. Ethograms, bouts and "
-                f"stats written to {_short_path(self._output_dir)}"
+                f"stats {where}"
             )
+            self._review_btn.setVisible(self._scored_single > 0)
             self._banner.setVisible(True)
             self.scored.emit(n)
         self._refresh_blocker()

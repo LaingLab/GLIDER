@@ -292,6 +292,9 @@ names anything that blocks the run, including a setting inside Options.
 When the run finishes, a banner reports **✓ Scored N videos** with
 **Show Files** (opens the output folder) and **Open in Session Review**
 (opens the Session Review window on that folder, with every ethogram loaded).
+Multi-animal results are the exception: their ethograms are written beside each
+video in `<video>_animals/`, Session Review cannot load them, and a run with
+only multi-animal results has no **Open in Session Review** button.
 
 GLIDER runs pose inference over each video and classifies it at the chosen
 cadence. Videos are processed one at a time, each writing into its own subfolder

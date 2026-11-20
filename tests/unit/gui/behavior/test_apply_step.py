@@ -151,7 +151,7 @@ def _finish_one(tab, tmp_path) -> Path:
     out = tmp_path / "out"
     (out / "a").mkdir(parents=True)
     (out / "a" / "ethogram_raw.csv").write_text("frame,behavior\n")
-    tab._output_dir = out
+    tab._output_dir = tab._scored_dir = out
     tab._videos = [tmp_path / "a.mp4"]
     tab._on_apply_finished(object(), tmp_path / "a.mp4", out / "a")
     return out
@@ -248,3 +248,81 @@ def test_footer_names_blockers_hidden_in_options(qtbot, tmp_path):
     assert tab._footer.message.text() == "Ready: 1 video, poses found for all."
     tab._reuse_poses.setChecked(False)
     assert "YOLO weights" in tab._footer.message.text()
+
+
+def test_multi_animal_only_run_hides_review_and_names_where(qtbot, tmp_path):
+    tab = _tab(qtbot)
+    tab._output_dir = tab._scored_dir = tmp_path / "out"
+    tab._videos = [tmp_path / "a.mp4"]
+    tab._run_total = 1
+    tab._on_apply_finished({0: tmp_path / "animal0_ethogram.csv"}, tmp_path / "a.mp4", tmp_path)
+    assert not tab._banner.isHidden()
+    assert tab._review_btn.isHidden()
+    assert "<video>_animals/" in tab._banner_text.text()
+
+
+def test_mixed_run_keeps_review_button(qtbot, tmp_path):
+    tab = _tab(qtbot)
+    out = tmp_path / "out"
+    tab._output_dir = tab._scored_dir = out
+    tab._videos = [tmp_path / "a.mp4", tmp_path / "b.mp4"]
+    tab._run_total = 2
+    tab._on_apply_finished({0: tmp_path / "x.csv"}, tmp_path / "a.mp4", tmp_path)
+    tab._on_apply_finished(object(), tmp_path / "b.mp4", out / "b")
+    assert not tab._review_btn.isHidden()
+    assert "out" in tab._banner_text.text()
+
+
+def test_banner_buttons_use_the_scored_folder_not_the_live_one(qtbot, tmp_path):
+    tab = _tab(qtbot)
+    out = _finish_one(tab, tmp_path)
+    tab._output_dir = tmp_path / "elsewhere"
+    with qtbot.waitSignal(tab.open_in_session_review) as blocker:
+        tab._review_btn.click()
+    assert blocker.args == [str(out)]
+
+
+def test_yolo_blocker_points_at_pose_folder_option(qtbot, tmp_path):
+    tab = _tab(qtbot)
+    video = tmp_path / "a.mp4"
+    video.write_bytes(b"")
+    tab._videos = [video]
+    tab._model_path = tmp_path / "m.pkl"
+    tab._refresh_pose_match()
+    assert "Options \u25b8 Pose CSV folder" in tab._run_blocker()
+    assert "Options \u25b8 Pose CSV folder" in tab._pose_match_label.text()
+
+
+def test_build_cohort_shows_progress_and_blocks_run(qtbot, tmp_path, monkeypatch):
+    from PyQt6.QtCore import QObject, QThread, pyqtSignal
+
+    from glider.gui.behavior import window as w
+    from glider.gui.behavior import workers
+
+    class FakeWorker(QObject):
+        progress = pyqtSignal(int, int)
+        finished = pyqtSignal(object)
+        failed = pyqtSignal(str)
+
+        def __init__(self, *a, **k):
+            super().__init__()
+
+        def run(self):
+            pass
+
+    (tmp_path / "s_DLC_x.csv").write_text("x\n")
+    monkeypatch.setattr(workers, "CohortSpeedWorker", FakeWorker)
+    monkeypatch.setattr(QThread, "start", lambda self, *a: None)
+    monkeypatch.setattr(w, "_unique_pose_csvs", lambda f: [tmp_path / "s_DLC_x.csv"])
+    monkeypatch.setattr(w.QFileDialog, "getExistingDirectory", lambda *a, **k: str(tmp_path))
+    monkeypatch.setattr(
+        w.QFileDialog, "getSaveFileName", lambda *a, **k: (str(tmp_path / "c.json"), "")
+    )
+    tab = _tab(qtbot)
+    tab.show()
+    assert tab._results_card.isHidden()
+    tab._on_build_cohort()
+    assert not tab._results_card.isHidden()
+    assert "cohort thresholds" in tab._footer.message.text().lower()
+    tab._end_cohort_run()
+    assert "Add at least one video" in tab._footer.message.text()
