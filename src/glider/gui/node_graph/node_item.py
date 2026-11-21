@@ -7,7 +7,7 @@ QGraphicsProxyWidget.
 
 import sys
 
-from PyQt6.QtCore import QObject, QPointF, QRectF, Qt, pyqtSignal
+from PyQt6.QtCore import QObject, QPointF, QRectF, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QBrush, QColor, QFont, QLinearGradient, QPainter, QPen
 from PyQt6.QtWidgets import (
     QGraphicsItem,
@@ -100,6 +100,9 @@ class NodeItem(QGraphicsRectItem):
         self._body_color = colors.Q_NODE_BODY
         self._selected_border_color = colors.Q_NODE_SELECTED
         self._border_width = 2
+        # Lit while the running flow is executing this node (see set_active).
+        self._active = False
+        self._active_gen = 0
 
         # Setup (order matters: create header before updating size)
         self._create_header()
@@ -248,7 +251,9 @@ class NodeItem(QGraphicsRectItem):
         )
 
         # Border
-        if self.isSelected():
+        if self._active:
+            pen = QPen(colors.Q_SUCCESS, self._border_width + 2)
+        elif self.isSelected():
             pen = QPen(self._selected_border_color, self._border_width + 1)
         else:
             alpha_color = colors.qcolor_with_alpha(self._header_color, 0.3)
@@ -274,6 +279,28 @@ class NodeItem(QGraphicsRectItem):
                 QPointF(rect.width() - text_width - 15, y + self.PORT_HEIGHT / 2), port.name
             )
             y += self.PORT_HEIGHT + self.PORT_SPACING
+
+    # A node that runs and fires in the same tick would never get painted lit.
+    ACTIVE_LINGER_MS = 400
+
+    def set_active(self, active: bool) -> None:
+        """Light the border while the flow executes this node.
+
+        Going inactive lingers briefly so instant nodes still visibly flash;
+        re-activating within the linger cancels the pending clear.
+        """
+        if active:
+            self._active_gen += 1
+            self._active = True
+            self.update()
+            return
+        gen = self._active_gen
+        QTimer.singleShot(self.ACTIVE_LINGER_MS, lambda: self._clear_active(gen))
+
+    def _clear_active(self, gen: int) -> None:
+        if gen == self._active_gen and self._active:
+            self._active = False
+            self.update()
 
     def itemChange(self, change, value):
         """Handle item changes."""

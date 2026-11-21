@@ -432,6 +432,12 @@ class NodeGraphView(QGraphicsView):
         self._connecting = False
         logger.debug(f"Connection created: {from_node_id}:{from_port} -> {to_node_id}:{to_port}")
 
+    def set_node_active(self, node_id: str, active: bool) -> None:
+        """Highlight the node the running flow is executing."""
+        node = self._nodes.get(node_id)
+        if node is not None:
+            node.set_active(active)
+
     def remove_node(self, node_id: str) -> None:
         """Remove a node from the graph."""
         if node_id in self._nodes:
