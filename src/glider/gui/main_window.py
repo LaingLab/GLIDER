@@ -2715,6 +2715,10 @@ class MainWindow(QMainWindow):
 
         self._core.on_state_change(lambda state: self._core_state_changed.emit(state))
         self._core.on_error(lambda source, error: self._core_error_occurred.emit(source, error))
+        # Same thread (qasync), so no signal hop needed.
+        self._core.flow_engine.on_node_active(
+            lambda node_id, active: self._graph_view.set_node_active(node_id, active)
+        )
         self._core.hardware_manager.on_connection_change(
             lambda board_id, state: self._hardware_connection_changed.emit(board_id, state)
         )
