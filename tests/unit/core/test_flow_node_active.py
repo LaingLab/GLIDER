@@ -35,5 +35,5 @@ async def test_a_node_is_active_from_entry_until_it_fires_on():
     assert events.index(("delay", True)) < events.index(("delay", False))
     assert events.index(("delay", False)) < events.index(("end", True))
     # Nothing is left lit once the flow stops.
-    last = {node_id: active for node_id, active in events}
+    last = dict(events)
     assert not any(last.values())
