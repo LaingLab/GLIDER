@@ -658,6 +658,20 @@ QTabBar::tab:hover:!selected {
 }
 
 /* Behavior Analysis step strip: the number (or tick) beside each tab title. */
+QTabWidget#StepTabs > QTabBar {
+    background-color: #0b0f14;
+    border: none;
+    border-bottom: 1px solid #1e2530;
+}
+
+QTabWidget#StepTabs > QTabBar::tab,
+QTabWidget#StepTabs > QTabBar::tab:selected,
+QTabWidget#StepTabs > QTabBar::tab:hover {
+    background-color: transparent;
+    border-radius: 0px;
+    margin: 0px;
+}
+
 QTabWidget#StepTabs > QTabBar::tab {
     padding-left: 8px;
 }

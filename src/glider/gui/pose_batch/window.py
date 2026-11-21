@@ -294,10 +294,7 @@ class PoseBatchWindow(QMainWindow):
         self._remove_all_action.setEnabled(False)
         self._remove_all_action.triggered.connect(lambda: self._remove_all())
 
-        self._header = ToolHeader(
-            "Batch Pose Tracking",
-            "Run a YOLO-pose model over folders of video and write a DLC CSV beside each one",
-        )
+        self._header = ToolHeader("Batch Pose Tracking")
         page.addWidget(self._header)
 
         self._tour = None
