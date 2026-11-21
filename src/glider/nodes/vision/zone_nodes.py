@@ -13,6 +13,7 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
+from glider.core.flow_loop import post_to_loop
 from glider.nodes.base_node import (
     InterfaceNode,
     NodeCategory,
@@ -177,6 +178,16 @@ class ZoneInputNode(InterfaceNode):
             except Exception as e:
                 logger.error(f"Exec callback error: {e}")
 
+    def _post_output(self, index: int, value) -> None:
+        """Set an output on the flow's loop: this runs on the vision thread.
+
+        Data outputs propagate into downstream nodes synchronously, so they
+        must not run on the vision thread. Posted in order with the exec
+        outputs, which go through the same loop queue.
+        """
+        if not post_to_loop(self._main_loop, self.set_output, index, value):
+            self.set_output(index, value)
+
     def update_zone_state(self, occupied: bool, object_count: int) -> None:
         """
         Update the zone state from CV processor.
@@ -198,8 +209,8 @@ class ZoneInputNode(InterfaceNode):
         self._object_count = object_count
 
         # Update data outputs
-        self.set_output(0, occupied)  # Occupied
-        self.set_output(1, object_count)  # Object Count
+        self._post_output(0, occupied)  # Occupied
+        self._post_output(1, object_count)  # Object Count
 
         # Trigger exec outputs on events.  update_zone_state() is called from the
         # CV thread, so we need a reference to the main event loop captured at

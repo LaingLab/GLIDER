@@ -13,6 +13,7 @@ from enum import Enum, auto
 from typing import Any
 
 from glider.core import flow_clock
+from glider.core.flow_loop import wrap_public_coroutines
 
 logger = logging.getLogger(__name__)
 
@@ -1088,3 +1089,7 @@ class FlowEngine:
         logger.info(
             f"Loaded flow with {len(self._nodes)} nodes and {len(self._connections)} connections"
         )
+
+
+# Every public coroutine runs on the flow loop when it is on (core/flow_loop.py).
+wrap_public_coroutines(FlowEngine)

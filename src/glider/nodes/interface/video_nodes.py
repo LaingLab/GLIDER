@@ -19,6 +19,7 @@ from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QImage, QPixmap
 from PyQt6.QtWidgets import QApplication, QLabel, QVBoxLayout, QWidget
 
+from glider.core.flow_loop import call_on_gui
 from glider.nodes.base_node import (
     GliderNode,
     NodeCategory,
@@ -209,28 +210,42 @@ class VideoPlaybackNode(GliderNode):
             return
 
         try:
-            self._ensure_player()
-
-            # Create a Future that will be resolved when the video finishes.
-            loop = asyncio.get_event_loop()
+            # Resolved from Qt's finished signal, on the GUI thread, so it is
+            # handed back to this (the flow's) loop thread-safely.
+            loop = asyncio.get_running_loop()
             finished_future: asyncio.Future = loop.create_future()
 
             def _on_finished():
                 if not finished_future.done():
-                    loop.call_soon_threadsafe(finished_future.set_result, True)
+                    loop.call_soon_threadsafe(_resolve)
 
-            self._player.finished.connect(_on_finished)
-            self._player.play()
+            def _resolve():
+                if not finished_future.done():
+                    finished_future.set_result(True)
+
+            # The window is a Qt widget: it must be built and driven on the GUI
+            # thread, and the flow may be on its own (core/flow_loop.py).
+            def _start_playback():
+                self._ensure_player()
+                self._player.finished.connect(_on_finished)
+                self._player.play()
+
+            await call_on_gui(_start_playback)
             logger.info(f"VideoPlayback: playing '{file_path}'")
 
             # Wait for the video to finish before proceeding.
             await finished_future
 
-            # Disconnect the one-shot slot to prevent duplicate triggers on replay.
-            try:
-                self._player.finished.disconnect(_on_finished)
-            except RuntimeError:
-                pass  # Already disconnected (e.g., window closed)
+            def _disconnect():
+                # One-shot slot: no duplicate triggers on replay.
+                if self._player is None:
+                    return
+                try:
+                    self._player.finished.disconnect(_on_finished)
+                except (RuntimeError, TypeError):
+                    pass  # Already disconnected (e.g., window closed)
+
+            await call_on_gui(_disconnect)
         except Exception as e:
             logger.error(f"VideoPlayback: playback error - {e}")
             self.set_error(str(e))
@@ -239,9 +254,9 @@ class VideoPlaybackNode(GliderNode):
 
     async def stop(self) -> None:
         """Close the video popup."""
-        if self._player is not None:
-            self._player.stop()
-            self._player = None
+        player, self._player = self._player, None
+        if player is not None:
+            await call_on_gui(player.stop)
 
     def exec_output(self, index: int = 0) -> None:
         """Trigger execution output."""

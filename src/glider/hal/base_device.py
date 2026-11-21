@@ -14,6 +14,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Optional
 
+from glider.core.flow_loop import wrap_public_coroutines
 from glider.hal.value_spec import KIND_SWITCH, KIND_WHOLE, ActionValueSpec, clamp_to_spec
 
 logger = logging.getLogger(__name__)
@@ -51,6 +52,15 @@ class BaseDevice(ABC):
     #: control surfaces will otherwise refuse it, one by greying the button and
     #: one by not offering it at all.
     ACTION_ARGS_SCHEMA: dict[str, list[dict[str, Any]]] = {}
+
+    def __init_subclass__(cls, **kwargs):
+        """Run every public coroutine method on the flow loop (core/flow_loop.py).
+
+        The GUI awaits board and device methods directly, so the hop has to live
+        here rather than at each call site. Plugin devices get it too.
+        """
+        super().__init_subclass__(**kwargs)
+        wrap_public_coroutines(cls)
 
     def __init__(
         self,
@@ -1744,3 +1754,7 @@ def create_device_from_dict(data: dict[str, Any], board: "BaseBoard") -> BaseDev
     if device_type not in DEVICE_REGISTRY:
         raise ValueError(f"Unknown device type: {device_type}")
     return DEVICE_REGISTRY[device_type].from_dict(data, board)
+
+
+# The base class's own coroutines (execute_action, shutdown, ...) too.
+wrap_public_coroutines(BaseDevice)

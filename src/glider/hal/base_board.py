@@ -15,6 +15,8 @@ from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Any
 
+from glider.core.flow_loop import wrap_public_coroutines
+
 logger = logging.getLogger(__name__)
 
 
@@ -91,6 +93,15 @@ class BaseBoard(ABC):
     the abstract methods. The async design ensures non-blocking operation
     compatible with GLIDER's asyncio-based event loop.
     """
+
+    def __init_subclass__(cls, **kwargs):
+        """Run every public coroutine method on the flow loop (core/flow_loop.py).
+
+        The GUI awaits board and device methods directly, so the hop has to live
+        here rather than at each call site. Plugin drivers get it too.
+        """
+        super().__init_subclass__(**kwargs)
+        wrap_public_coroutines(cls)
 
     def __init__(self, port: str | None = None, auto_reconnect: bool = False):
         """
@@ -516,3 +527,7 @@ class BaseBoard(ABC):
         instance = cls(port=data.get("port"), auto_reconnect=data.get("auto_reconnect", False))
         instance._id = data.get("id", instance._id)
         return instance
+
+
+# The base class's own coroutines (emergency_stop, ...) too.
+wrap_public_coroutines(BaseBoard)

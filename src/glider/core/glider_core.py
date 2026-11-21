@@ -24,6 +24,7 @@ from glider.core.experiment_session import (
     SessionState,
 )
 from glider.core.flow_engine import FlowEngine
+from glider.core.flow_loop import estop_entry, on_flow_loop
 from glider.core.hardware_manager import HardwareManager
 from glider.core.live_signals import LiveSignalBus
 from glider.vision.arena import ArenaCalibration
@@ -845,6 +846,7 @@ class GliderCore:
         # as the choice.
         self._session.set_vision(self._cv_processor.settings.to_dict())
 
+    @on_flow_loop
     async def setup_hardware(self) -> bool:
         """
         Set up hardware from the current session.
@@ -931,6 +933,7 @@ class GliderCore:
 
         return success
 
+    @on_flow_loop
     async def connect_hardware(self) -> dict[str, bool]:
         """
         Connect to all configured hardware.
@@ -982,6 +985,7 @@ class GliderCore:
 
         self._flow_engine.load_from_session(self._session)
 
+    @on_flow_loop
     async def start_experiment(self) -> None:
         """Start running the experiment."""
         async with self._experiment_lock:
@@ -1202,6 +1206,7 @@ class GliderCore:
         self._data_recorder.set_flow_anchor(self._flow_start_wall)
         self._event_logger.record_flow_marker("start")
 
+    @on_flow_loop
     async def stop_experiment(self) -> None:
         """Stop the running experiment and set all devices to safe state."""
         async with self._experiment_lock:
@@ -1360,6 +1365,7 @@ class GliderCore:
                 return_exceptions=True,
             )
 
+    @on_flow_loop
     async def pause_experiment(self) -> None:
         """Pause the running experiment."""
         if self._session is None or self._session.state != SessionState.RUNNING:
@@ -1378,6 +1384,7 @@ class GliderCore:
 
         self._session.state = SessionState.PAUSED
 
+    @on_flow_loop
     async def resume_experiment(self) -> None:
         """Resume a paused experiment."""
         if self._session is None or self._session.state != SessionState.PAUSED:
@@ -1396,6 +1403,7 @@ class GliderCore:
 
         self._session.state = SessionState.RUNNING
 
+    @estop_entry
     async def emergency_stop(self) -> None:
         """
         Trigger emergency stop.
@@ -1421,6 +1429,7 @@ class GliderCore:
                 if self._session:
                     self._session.state = SessionState.ERROR
 
+    @on_flow_loop
     async def shutdown(self) -> None:
         """Shutdown the GLIDER core."""
         if self._shutting_down:
