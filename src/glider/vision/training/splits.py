@@ -111,15 +111,14 @@ def split_counts(project: StudioProject) -> dict[str, int]:
 
 
 def leak_notice(project: StudioProject) -> str:
-    """Why validation scores would be optimistic, or "" when no video leaks."""
+    """Why validation scores would be optimistic, or "" when no video leaks.
+
+    A one-video project always splits per frame, so there is nothing to act
+    on and nothing is said.
+    """
     leaky = leaky_videos(project)
-    if not leaky:
+    if not leaky or len(project.videos) <= 1:
         return ""
-    if len(project.videos) <= 1:
-        return (
-            "All frames come from one video \u2014 validation scores will look better than "
-            "they are. Add a second video for an honest check."
-        )
     return "\n".join(
         f"{Path(project.videos[k]).name} has frames in train and in val/test \u2014 "
         "validation scores will look better than they are. Move its frames to one split."

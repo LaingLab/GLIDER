@@ -315,11 +315,83 @@ def test_leak_notice(qtbot, window, tmp_path):
     grid = window._grid
     grid.move_requested.emit([0, 1], "train")
     grid.move_requested.emit([2, 3], "val")
+    assert grid.notice.isHidden()  # one video: nothing to act on, so nothing said
+    _extract(qtbot, window, [_clip(tmp_path / "b.avi")], per_video=2)
     assert not grid.notice.isHidden()
     assert grid.notice.text() == leak_notice(window._project)
-    assert grid.notice.text().startswith("All frames come from one video")
+    assert grid.notice.text().startswith("a.avi has frames in train and in val/test")
     grid.move_requested.emit([0, 1, 2, 3], "train")
     assert grid.notice.isHidden()
+
+
+def _png(path, value=128):
+    import cv2
+    import numpy as np
+
+    image = np.full((48, 64, 3), value, np.uint8)
+    cv2.imwrite(str(path), image)
+    return path
+
+
+def test_images_are_added_alongside_videos(qtbot, window, tmp_path):
+    project = StudioProject.create(tmp_path / "proj", "Test", MOUSE)
+    window.open_project(project.folder)
+    shots = tmp_path / "shots"
+    shots.mkdir()
+    images = [_png(shots / "cage1.png", 40), _png(shots / "cage2.jpg", 200)]
+    window.extract([_clip(tmp_path / "a.avi")], 2, "uniform", images=images)
+    qtbot.waitUntil(lambda: window._thread is None, timeout=20000)
+    frames = window._project.frames
+    assert sorted(f.source for f in frames if f.source) == ["cage1.png", "cage2.jpg"]
+    assert all(window._project.image_path(f).exists() for f in frames)
+    key = next(f.video for f in frames if f.source)
+    assert window._project.is_image_folder(key)
+    # adding the same images again adds nothing
+    window.extract([], 2, "uniform", images=images)
+    qtbot.waitUntil(lambda: window._thread is None, timeout=20000)
+    assert len(window._project.frames) == len(frames)
+    reloaded = StudioProject.load(project.folder)
+    assert {f.source for f in reloaded.frames} == {"", "cage1.png", "cage2.jpg"}
+
+
+def test_search_filters_the_grid(qtbot, window, tmp_path):
+    project = StudioProject.create(tmp_path / "proj", "Test", MOUSE)
+    window.open_project(project.folder)
+    shots = tmp_path / "shots"
+    shots.mkdir()
+    window.extract([_clip(tmp_path / "a.avi")], 2, "uniform", images=[_png(shots / "rearing.png")])
+    qtbot.waitUntil(lambda: window._thread is None, timeout=20000)
+    grid = window._grid
+    grid.search.setText("rearing")
+    rows = grid.gallery.visible_rows()
+    assert [window._project.frames[r].source for r in rows] == ["rearing.png"]
+    assert not grid.all_chip.isChecked()
+    grid.search.setText("a.avi")
+    assert len(grid.gallery.visible_rows()) == 2
+    grid.all_chip.click()
+    assert grid.search.text() == ""
+    assert len(grid.gallery.visible_rows()) == 3
+
+
+def test_rail_tools_are_named(window):
+    names = [b.text() for b in window._mode_buttons.values()]
+    assert names == ["Points", "Skeleton"]
+    assert [b.text() for b in window._tool_buttons.values()] == ["Polygon", "Auto"]
+
+
+def test_train_dialog_needs_annotations_and_builds_args(qtbot, tmp_path):
+    from glider.gui.animal_annotator.train_dialog import TrainDialog, base_model
+
+    project = StudioProject.create(tmp_path / "proj", "Test", MOUSE)
+    dialog = TrainDialog(project)
+    qtbot.addWidget(dialog)
+    assert not dialog._start_btn.isEnabled()
+    assert base_model(project, "n") == "yolo11n-pose.pt"
+    args = dialog.train_args(tmp_path / "data.yaml", "run1")
+    assert args["model"] == "yolo11n-pose.pt"
+    assert args["epochs"] == 100 and args["imgsz"] == 640
+    assert args["project"] == str(project.folder / "runs")
+    assert "device" not in args
 
 
 def test_open_old_project_migrates_splits(qtbot, window, tmp_path):
@@ -443,6 +515,23 @@ def test_add_images_dialog_lists_project_videos_unticked(qtbot, tmp_path):
     assert dialog.videos == [(tmp_path / "b.avi").resolve()]
     dialog._list.item(0).setCheckState(Qt.CheckState.Checked)
     assert dialog.videos == [tmp_path / "a.avi", (tmp_path / "b.avi").resolve()]
+    dialog.add_paths([str(tmp_path / "c.PNG")])
+    assert dialog.images == [(tmp_path / "c.PNG").resolve()]
+    assert len(dialog.videos) == 2
+
+
+def test_add_images_dialog_hides_image_folders(qtbot, tmp_path):
+    from glider.gui.animal_annotator.add_images import AddImagesDialog
+
+    project = StudioProject.create(tmp_path / "proj", "Test", MOUSE)
+    project.videos["a"] = str(tmp_path / "a.avi")
+    project.videos["shots"] = str(tmp_path / "shots")
+    dialog = AddImagesDialog(project)
+    qtbot.addWidget(dialog)
+    assert dialog._list.count() == 1
+    assert not dialog._ok.isEnabled()
+    dialog.add_paths([str(tmp_path / "x.jpg")])
+    assert dialog._ok.isEnabled() and not dialog._per_video.isEnabled()
 
 
 def test_tools_card_and_menu_open_the_studio(main_window_factory, qtbot):

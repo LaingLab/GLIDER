@@ -105,6 +105,20 @@ QFrame[studioStrip="true"] {{
     border-top: 1px solid {colors.BORDER};
     border-bottom: 1px solid {colors.BORDER};
 }}
+QFrame[studioStrip="true"] QWidget, QFrame[studioStrip="true"] QLabel {{
+    background-color: transparent;
+    border: none;
+}}
+QLineEdit[studioSearch="true"] {{
+    background-color: {colors.SURFACE_1};
+    border: 1px solid {colors.BORDER};
+    border-radius: {radius.LARGE}px;
+    padding: 3px 10px;
+    color: {colors.TEXT_PRIMARY};
+}}
+QLineEdit[studioSearch="true"]:focus {{
+    border-color: {colors.ACCENT};
+}}
 QFrame[studioSelection="true"] {{
     background-color: rgba(56, 189, 248, 0.08);
     border: none;
@@ -115,13 +129,16 @@ QToolButton[railTool="true"] {{
     color: {colors.TEXT_SECONDARY};
     border: none;
     border-radius: {radius.SMALL}px;
-    min-width: 34px;
-    min-height: 34px;
-    font-size: 20px;
+    min-width: 58px;
+    padding: 4px 2px;
+    font-size: 11px;
+}}
+QToolButton[railTool="true"][withMenu="true"] {{
+    padding-right: 12px;
 }}
 QToolButton[railTool="true"]::menu-button {{
     border: none;
-    width: 10px;
+    width: 12px;
 }}
 QToolButton[railTool="true"]:hover {{
     background-color: {colors.SURFACE_2};

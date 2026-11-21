@@ -54,6 +54,11 @@ TASK_POSE = "pose"
 TASK_SEGMENT = "segment"
 TASKS = (TASK_POSE, TASK_SEGMENT)
 
+#: Files Add Images treats as videos to pull frames from.
+VIDEO_SUFFIXES = (".mp4", ".avi", ".mov", ".mkv", ".m4v", ".wmv", ".mpg", ".mpeg")
+#: Files Add Images copies in as they are.
+IMAGE_SUFFIXES = (".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp")
+
 #: Left/right spellings recognised when pairing keypoints for flip augmentation.
 _SIDES = (("left", "right"), ("l", "r"))
 
@@ -112,6 +117,8 @@ class FrameRecord:
     skipped: bool = False
     #: "train", "val" or "test"; "" until assigned.
     split: str = ""
+    #: The original file name of an imported image; "" for a video frame.
+    source: str = ""
 
     def to_dict(self) -> dict:
         data = {"name": self.name, "video": self.video, "frame": self.frame}
@@ -119,6 +126,8 @@ class FrameRecord:
             data["skipped"] = True
         if self.split:
             data["split"] = self.split
+        if self.source:
+            data["source"] = self.source
         return data
 
     @classmethod
@@ -130,6 +139,7 @@ class FrameRecord:
             frame=int(data["frame"]),
             skipped=bool(data.get("skipped", False)),
             split=split if split in ("train", "val", "test") else "",
+            source=str(data.get("source", "")),
         )
 
 
@@ -383,6 +393,11 @@ class StudioProject:
         self.frames = [f for f in self.frames if f.video != video_key]
         self.videos.pop(video_key, None)
         return len(gone)
+
+    def is_image_folder(self, video_key: str) -> bool:
+        """True when the key is a folder of imported images, not a video."""
+        path = self.videos.get(video_key, "")
+        return bool(path) and Path(path).suffix.lower() not in VIDEO_SUFFIXES
 
     def frame_by_name(self, name: str) -> FrameRecord | None:
         return next((f for f in self.frames if f.name == name), None)

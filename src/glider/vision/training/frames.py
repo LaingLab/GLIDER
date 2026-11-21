@@ -28,6 +28,7 @@ __all__ = [
     "ExtractionCancelledError",
     "diverse_indices",
     "extract_frames",
+    "import_images",
     "uniform_indices",
 ]
 
@@ -170,4 +171,54 @@ def extract_frames(
         assign_splits(project, added)
         project.save()
     logger.info("added %d frames from %s (%s)", len(added), video.name, method)
+    return added
+
+
+def import_images(
+    project: StudioProject,
+    images: list[Path | str],
+    progress_cb: Callable[[int, int], None] | None = None,
+    cancel_cb: Callable[[], bool] | None = None,
+) -> list[FrameRecord]:
+    """Copy image files into the project as frames, and save it.
+
+    Images are grouped by the folder they came from, which stands in for a
+    video: splits keep one folder's images together, and the Video filter
+    lists the folder. An image already imported from the same folder is not
+    added twice. Returns the frames added.
+
+    Raises:
+        ExtractionCancelledError: ``cancel_cb`` returned True. Images copied
+            before the cancel are kept and saved.
+    """
+    added: list[FrameRecord] = []
+    ensure_splits(project)
+    project.images_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        for step, image in enumerate(images):
+            if cancel_cb and cancel_cb():
+                raise ExtractionCancelledError()
+            path = Path(image)
+            key = project.video_key(path.parent)
+            if any(f.video == key and f.source == path.name for f in project.frames):
+                continue
+            try:
+                data = np.fromfile(str(path), dtype=np.uint8)
+                frame = cv2.imdecode(data, cv2.IMREAD_COLOR) if data.size else None
+            except OSError:
+                frame = None
+            if frame is None:
+                logger.warning("could not read image %s; skipped", path)
+                continue
+            number = 1 + max((f.frame for f in project.frames if f.video == key), default=-1)
+            record = FrameRecord(project.frame_name(key, number), key, number, source=path.name)
+            _write_jpeg(project.image_path(record), frame)
+            project.frames.append(record)
+            added.append(record)
+            if progress_cb:
+                progress_cb(step + 1, len(images))
+    finally:
+        assign_splits(project, added)
+        project.save()
+    logger.info("imported %d images", len(added))
     return added
