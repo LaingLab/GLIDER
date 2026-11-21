@@ -460,3 +460,40 @@ def test_exported_from_devices_package():
     from glider.hal import devices
 
     assert devices.GenericSerialDevice is GenericSerialDevice
+
+
+@pytest.mark.asyncio
+async def test_unplugged_port_reads_as_disconnected(fake_serial):
+    """The serial board never drops, so the device has to notice its own port."""
+    from glider.hal.base_board import ConnectionState
+
+    device = await _initialized()
+    present = [True]
+    device._port_present = lambda: present[0]
+    device._port_listed = True
+    notified = []
+    device.set_link_state_callback(lambda d: notified.append(d.link_state))
+
+    assert device.owns_link
+    await device.poll_link()
+    assert device.link_state is ConnectionState.CONNECTED and notified == []
+
+    present[0] = False
+    await device.poll_link()
+    assert notified == [ConnectionState.DISCONNECTED]
+
+    present[0] = True
+    await device.poll_link()
+    assert notified == [ConnectionState.DISCONNECTED, ConnectionState.CONNECTED]
+
+
+@pytest.mark.asyncio
+async def test_unlisted_port_is_never_judged(fake_serial):
+    """A pty or loop:// URL is never enumerated; absence proves nothing."""
+    from glider.hal.base_board import ConnectionState
+
+    device = await _initialized()
+    device._port_listed = False
+    device._port_present = lambda: False
+    await device.poll_link()
+    assert device.link_state is ConnectionState.CONNECTED

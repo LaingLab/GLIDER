@@ -170,6 +170,10 @@ class GenericSerialDevice(BaseDevice):
         # ``_state`` (DataRecorder reads a ``_state`` attribute in preference to
         # calling get_state()).
         self._latest: tuple[str, float] | None = None
+        # Link tracking (see poll_link). _port_listed: the OS enumerated the
+        # port when we opened it, so its absence later means it was unplugged.
+        self._port_listed = False
+        self._port_gone = False
 
     # --- settings ---
 
@@ -269,6 +273,45 @@ class GenericSerialDevice(BaseDevice):
             "read": self.read,
         }
 
+    # --- link state ---
+
+    @property
+    def owns_link(self) -> bool:
+        return True
+
+    @property
+    def link_state(self):
+        from glider.hal.base_board import ConnectionState
+
+        if not self._initialized or self._port_gone:
+            return ConnectionState.DISCONNECTED
+        return ConnectionState.CONNECTED
+
+    def _port_present(self) -> bool:
+        from serial.tools import list_ports
+
+        return any(p.device == self._port for p in list_ports.comports())
+
+    async def poll_link(self) -> None:
+        """Notice a USB-serial adapter that was unplugged.
+
+        The board here is the host's serial stack, which never drops, so a
+        pulled cable otherwise left this device reading Connected forever.
+        Ports the OS never enumerated (ptys, ``loop://``) are not judged.
+        """
+        if not self._initialized or not self._port_listed:
+            return
+        gone = not await asyncio.to_thread(self._port_present)
+        if gone != self._port_gone:
+            self._port_gone = gone
+            logger.warning(
+                "GenericSerial %s: port %s %s",
+                self._name,
+                self._port,
+                "unplugged" if gone else "is back",
+            )
+            self._notify_link_state()
+
     # --- lifecycle ---
 
     async def initialize(self) -> None:
@@ -294,6 +337,11 @@ class GenericSerialDevice(BaseDevice):
             )
 
         self._serial = await asyncio.to_thread(_open)
+        self._port_gone = False
+        try:
+            self._port_listed = await asyncio.to_thread(self._port_present)
+        except Exception:  # noqa: BLE001 - enumeration is best-effort
+            self._port_listed = False
 
         if self._stream:
             # Bound the reader's blocking read so it observes the stop event
