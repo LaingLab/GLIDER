@@ -302,6 +302,8 @@ class GalleryView(QListView):
 
     frame_activated = pyqtSignal(int)
     selection_changed = pyqtSignal()
+    #: Delete or Backspace with tiles selected.
+    delete_pressed = pyqtSignal()
 
     def __init__(self, parent=None, *, strip: bool = False):
         super().__init__(parent)
@@ -426,6 +428,9 @@ class GalleryView(QListView):
     def keyPressEvent(self, event) -> None:
         if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and self.currentIndex().isValid():
             self.frame_activated.emit(self.currentIndex().row())
+            return
+        if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace) and self.selected_rows():
+            self.delete_pressed.emit()
             return
         super().keyPressEvent(event)
 

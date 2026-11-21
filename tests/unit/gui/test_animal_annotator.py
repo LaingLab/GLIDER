@@ -628,3 +628,54 @@ def test_removing_a_video_clears_undo(qtbot, window, tmp_path, monkeypatch):
     window._grid.remove_video_requested.emit("a")
     assert not window._history.can_undo
     assert not window._undo_btn.isEnabled()
+
+
+def test_delete_selected_images(qtbot, window, tmp_path):
+    project = StudioProject.create(tmp_path / "proj", "Test", MOUSE)
+    window.open_project(project.folder)
+    shots = tmp_path / "shots"
+    shots.mkdir()
+    window.extract([_clip(tmp_path / "a.avi")], 3, "uniform", images=[_png(shots / "one.png")])
+    qtbot.waitUntil(lambda: window._thread is None, timeout=20000)
+    frames = list(window._project.frames)
+    assert len(frames) == 4
+    window.show_editor(0)
+    window._canvas.place(5, 5)  # frame 0 annotated
+    window.show_grid()
+    doomed = [frames[0], frames[3]]  # an annotated video frame and the only image
+    paths = [window._project.image_path(f) for f in doomed]
+    label = window._project.label_path(frames[0])
+    assert label.exists()
+
+    window._delete_frames([0, 3], confirm=False)
+
+    names = [f.name for f in window._project.frames]
+    assert names == [frames[1].name, frames[2].name]
+    assert not any(p.exists() for p in paths) and not label.exists()
+    assert not any(window._project.is_image_folder(k) for k in window._project.videos)
+    assert [f.name for f in StudioProject.load(project.folder).frames] == names
+    assert window._grid._stats["total"].text() == "2"
+    assert not window._history.can_undo
+
+
+def test_delete_key_and_bar_button_ask_to_delete_the_selection(qtbot, window, tmp_path):
+    from PyQt6.QtCore import Qt as _Qt
+
+    project = StudioProject.create(tmp_path / "proj", "Test", MOUSE)
+    window.open_project(project.folder)
+    _extract(qtbot, window, [_clip(tmp_path / "a.avi")], per_video=3)
+    grid = window._grid
+    asked: list[list] = []
+    grid.delete_requested.disconnect()  # the window's handler would open a modal box
+    grid.delete_requested.connect(asked.append)
+    model = grid.gallery.gallery_model
+    grid.gallery.selectionModel().select(
+        model.index(1), grid.gallery.selectionModel().SelectionFlag.Select
+    )
+    grid.gallery.selectionModel().select(
+        model.index(2), grid.gallery.selectionModel().SelectionFlag.Select
+    )
+    assert not grid.selection_bar.isHidden()
+    grid.delete_btn.click()
+    qtbot.keyClick(grid.gallery, _Qt.Key.Key_Delete)
+    assert asked == [[1, 2], [1, 2]]

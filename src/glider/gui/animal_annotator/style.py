@@ -119,6 +119,12 @@ QLineEdit[studioSearch="true"] {{
 QLineEdit[studioSearch="true"]:focus {{
     border-color: {colors.ACCENT};
 }}
+QPushButton[danger="true"] {{
+    color: #f87171;
+}}
+QPushButton[danger="true"]:hover {{
+    background-color: rgba(248, 113, 113, 0.14);
+}}
 QFrame[studioSelection="true"] {{
     background-color: rgba(56, 189, 248, 0.08);
     border: none;

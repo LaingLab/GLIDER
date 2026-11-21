@@ -103,6 +103,8 @@ class GridPage(QWidget):
     skip_requested = pyqtSignal(list, bool)
     #: video key
     remove_video_requested = pyqtSignal(str)
+    #: rows to delete, images and labels
+    delete_requested = pyqtSignal(list)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -280,8 +282,18 @@ class GridPage(QWidget):
             button.clicked.connect(lambda _c=False, k=skipped: self._skip(k))
             self._bulk_buttons.append(button)
             bar.addWidget(button)
+        self.delete_btn = secondary(QPushButton("Delete…"))
+        self.delete_btn.setProperty("danger", True)
+        self.delete_btn.setToolTip("Delete the selected images and their labels (Delete key)")
+        self.delete_btn.clicked.connect(self._delete)
+        self._bulk_buttons.append(self.delete_btn)
+        bar.addWidget(self.delete_btn)
         self.selection_bar.setVisible(False)
         layout.addWidget(self.selection_bar)
+
+        self.gallery.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.gallery.customContextMenuRequested.connect(self._context_menu)
+        self.gallery.delete_pressed.connect(self._delete)
 
         self.set_project(None)
 
@@ -476,3 +488,34 @@ class GridPage(QWidget):
         rows = self.gallery.selected_rows()
         if rows:
             self.skip_requested.emit(rows, skipped)
+
+    def _delete(self) -> None:
+        rows = self.gallery.selected_rows()
+        if rows and not self._busy and self._project is not None:
+            self.delete_requested.emit(rows)
+
+    def _context_menu(self, pos) -> None:
+        """Right-click: act on the selection, or on the tile under the cursor if it isn't in it."""
+        if self._busy or self._project is None:
+            return
+        index = self.gallery.indexAt(pos)
+        if not index.isValid():
+            return
+        if not self.gallery.selectionModel().isSelected(index):
+            self.gallery.setCurrentIndex(index)  # selects only that tile
+        rows = self.gallery.selected_rows()
+        if not rows:
+            return
+        noun = f"{len(rows)} images" if len(rows) > 1 else "image"
+        menu = QMenu(self.gallery)
+        if len(rows) == 1:
+            menu.addAction("Open", lambda: self.frame_activated.emit(rows[0]))
+            menu.addSeparator()
+        for split in SPLITS:
+            menu.addAction(f"Move to {split.capitalize()}", lambda s=split: self._move(s))
+        menu.addSeparator()
+        menu.addAction("Skip", lambda: self._skip(True))
+        menu.addAction("Unskip", lambda: self._skip(False))
+        menu.addSeparator()
+        menu.addAction(f"Delete {noun}…", self._delete)
+        menu.exec(self.gallery.viewport().mapToGlobal(pos))

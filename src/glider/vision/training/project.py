@@ -394,6 +394,24 @@ class StudioProject:
         self.videos.pop(video_key, None)
         return len(gone)
 
+    def remove_frames(self, names: list[str] | set[str]) -> int:
+        """Delete frames by name, with their images and labels. Returns how many went.
+
+        A folder of imported images left with no images is forgotten too; a
+        video stays registered, so Add Images can still top it up. The caller
+        saves, and should confirm first when labelled frames are among them.
+        """
+        names = set(names)
+        gone = [f for f in self.frames if f.name in names]
+        for frame in gone:
+            self.image_path(frame).unlink(missing_ok=True)
+            self.label_path(frame).unlink(missing_ok=True)
+        self.frames = [f for f in self.frames if f.name not in names]
+        used = {f.video for f in self.frames}
+        for key in [k for k in self.videos if k not in used and self.is_image_folder(k)]:
+            del self.videos[key]
+        return len(gone)
+
     def is_image_folder(self, video_key: str) -> bool:
         """True when the key is a folder of imported images, not a video."""
         path = self.videos.get(video_key, "")

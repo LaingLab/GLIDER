@@ -582,6 +582,7 @@ class AnimalAnnotatorWindow(QMainWindow):
         self._grid.move_requested.connect(self._move_frames)
         self._grid.skip_requested.connect(self._skip_frames)
         self._grid.remove_video_requested.connect(self._remove_video)
+        self._grid.delete_requested.connect(self._delete_frames)
         self._stack = QStackedWidget()
         self._stack.addWidget(self._grid)
         label_page = self._build_label_page()
@@ -664,6 +665,41 @@ class AnimalAnnotatorWindow(QMainWindow):
         self._history.clear()  # edits index into project.frames, which just shifted
         self._refresh_undo_buttons()
         self._refresh_all()
+
+    def _delete_frames(self, rows: list, *, confirm: bool = True) -> None:
+        """Delete frames and their labels from disk, after asking. Not undoable."""
+        if self._project is None or self._thread is not None:
+            return
+        frames = [self._project.frames[r] for r in rows if 0 <= r < len(self._project.frames)]
+        if not frames:
+            return
+        labelled = sum(1 for f in frames if self._project.is_labelled(f))
+        what = f"{len(frames)} images" if len(frames) > 1 else "this image"
+        text = f"Delete {what} from the project?"
+        if labelled:
+            text += f"\n\n{labelled} of them {'are' if labelled > 1 else 'is'} annotated; "
+            text += "the annotations go too."
+        text += "\n\nThis can't be undone. Source videos and image files are not touched."
+        if confirm:
+            box = QMessageBox(QMessageBox.Icon.Warning, "Delete images", text, parent=self)
+            delete = box.addButton("Delete", QMessageBox.ButtonRole.DestructiveRole)
+            box.addButton(QMessageBox.StandardButton.Cancel)
+            box.setDefaultButton(QMessageBox.StandardButton.Cancel)
+            box.exec()
+            if box.clickedButton() is not delete:
+                return
+        self._save_current_frame()
+        self._project.remove_frames({f.name for f in frames})
+        try:
+            self._project.save()
+        except OSError as e:
+            QMessageBox.warning(self, "Save project", f"Could not save the project: {e}")
+        self._frame_index = -1
+        self._history.clear()  # edits index into project.frames, which just shifted
+        self._refresh_undo_buttons()
+        self._gallery.clearSelection()
+        self._refresh_all()
+        self._grid.status_text.setText(f"Deleted {len(frames)} image(s).")
 
     def _add_images(self) -> None:
         if self._project is None or self._thread is not None:
