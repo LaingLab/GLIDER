@@ -177,6 +177,8 @@ glider = [
     "gui/styles/icons/lucide/*.svg",
     "gui/styles/icons/lucide/LICENSE",
     "assets/*.png",
+    # The launch splash animation (made in tools/splash-animation).
+    "assets/*.gif",
     # The curated plugin catalogue PluginRegistry falls back to when the
     # machine is offline; without this line it exists in a source checkout and
     # is missing from an installed wheel.
