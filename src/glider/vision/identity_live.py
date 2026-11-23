@@ -6,10 +6,10 @@ frame's detections with ``linear_sum_assignment``; a match beyond the travel
 limit (``max_travel_px`` per camera frame since the slot was last observed) is
 refused. Given timestamps, elapsed camera frames come from time at ``fps``, so
 a processing pipeline that drops frames still allows the real travel; without
-them, each update counts as one frame. Beyond the one-frame reach (``max_travel_px``), a hidden slot may
-only take a detection that newly appeared this frame (none in the previous
-frame within ``max_travel_px``), so a hidden animal's name never jumps to an
-animal that was already in view.
+them, each update counts as one frame. Beyond the one-frame reach
+(``max_travel_px``), a hidden slot may only take a detection that newly
+appeared this frame (none in the previous frame within ``max_travel_px``), so a
+hidden animal's name never jumps to an animal that was already in view.
 """
 
 from __future__ import annotations
