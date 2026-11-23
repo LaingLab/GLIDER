@@ -3,8 +3,10 @@
 Pure numpy, Qt-free. One slot per named animal (plus, in continuity mode, one
 per clicked-but-unnamed animal). Each frame the slots are matched to the
 frame's detections with ``linear_sum_assignment``; a match beyond the travel
-limit (``max_travel_px`` per frame since the slot was last observed) is
-refused. Beyond the one-frame reach (``max_travel_px``), a hidden slot may
+limit (``max_travel_px`` per camera frame since the slot was last observed) is
+refused. Given timestamps, elapsed camera frames come from time at ``fps``, so
+a processing pipeline that drops frames still allows the real travel; without
+them, each update counts as one frame. Beyond the one-frame reach (``max_travel_px``), a hidden slot may
 only take a detection that newly appeared this frame (none in the previous
 frame within ``max_travel_px``), so a hidden animal's name never jumps to an
 animal that was already in view.
@@ -41,9 +43,11 @@ class _Slot:
     kps: np.ndarray | None = None
     det_cls: str = ""
     conf: float = 0.0
-    hidden: int = 0  # frames since last observed
+    hidden: int = 0  # updates since last observed
+    t: float | None = None  # timestamp of the last observation
     age: int = 0
     mismatch: int = 0  # consecutive frames matched to the wrong class
+    mismatch_t: float | None = None  # timestamp the current mismatch began
 
 
 def _kps(d: Detection) -> np.ndarray | None:
@@ -61,6 +65,7 @@ class IdentityAssigner:
         max_travel_px: float = 40.0,
         separation_px: float = 60.0,
         relabel_frames: int = 15,
+        fps: float = 30.0,
     ):
         self.names = list(names)
         self.mode = mode
@@ -68,10 +73,12 @@ class IdentityAssigner:
         self.max_travel_px = max_travel_px
         self.separation_px = separation_px
         self.relabel_frames = relabel_frames
+        self.fps = fps
         self.reset()
 
     def reset(self) -> None:
         self._prev: list[tuple[int, int]] = []  # last frame's detection centroids
+        self._t: float | None = None  # last update's timestamp
         if self.mode == "appearance":
             self._slots = [_Slot(n, c) for n, c in zip(self.names, self.class_names, strict=True)]
         else:
@@ -113,12 +120,15 @@ class IdentityAssigner:
         self._prev = []
         for i in sorted(bound):
             slot = _Slot(self.names[i] if i < n else None)
-            self._observe(slot, bound[i], moved=False)
+            self._observe(slot, bound[i], moved=False, t=self._t)
             self._slots.append(slot)
         return []
 
-    def update(self, detections: list[Detection]) -> list[TrackedObject]:
+    def update(
+        self, detections: list[Detection], timestamp: float | None = None
+    ) -> list[TrackedObject]:
         n = len(self.names)
+        self._t = timestamp
         if not self.ready:
             return [self._extra(d, n + j) for j, d in enumerate(detections)]
 
@@ -134,7 +144,7 @@ class IdentityAssigner:
             if s.pos is None:
                 cost[i] += _HIDDEN_COST
                 continue
-            limit = reach * (s.hidden + 1)
+            limit = reach * self._frames_since(s.t, timestamp, s.hidden + 1)
             pred = self._predict(s)
             for j, d in enumerate(detections):
                 far = math.dist(d.centroid, pred)
@@ -153,7 +163,17 @@ class IdentityAssigner:
             for i, s in enumerate(slots):
                 j = match.get(i)
                 wrong = s.cls is not None and j is not None and detections[j].class_name != s.cls
-                s.mismatch = s.mismatch + 1 if wrong else 0
+                if not wrong:
+                    s.mismatch, s.mismatch_t = 0, None
+                    continue
+                if not s.mismatch:
+                    s.mismatch_t = timestamp
+                # Camera frames the mismatch spans, counting its first.
+                s.mismatch = (
+                    s.mismatch + 1
+                    if timestamp is None or s.mismatch_t is None
+                    else round((timestamp - s.mismatch_t) * self.fps) + 1
+                )
                 if s.mismatch <= self.relabel_frames:
                     continue
                 taken = {c for k, c in match.items() if k != i}
@@ -163,7 +183,7 @@ class IdentityAssigner:
                 if own:
                     match[i] = min(own, key=lambda j: raw[i, j])
                     relabeled.add(i)
-                    s.mismatch = 0
+                    s.mismatch, s.mismatch_t = 0, None
 
         out: list[TrackedObject] = []
         stitched = set()
@@ -171,7 +191,7 @@ class IdentityAssigner:
             if i in match:
                 if s.pos is not None and s.hidden:
                     stitched.add(i)
-                self._observe(s, detections[match[i]], moved=i not in relabeled)
+                self._observe(s, detections[match[i]], moved=i not in relabeled, t=timestamp)
             else:
                 s.hidden += 1
             out.append(self._slot_object(s, i))
@@ -200,6 +220,12 @@ class IdentityAssigner:
         return out
 
     # -- internals -----------------------------------------------------------
+
+    def _frames_since(self, since: float | None, now: float | None, fallback: int) -> int:
+        """Camera frames from ``since`` to ``now`` (at least 1), else ``fallback``."""
+        if since is None or now is None:
+            return fallback
+        return max(1, round((now - since) * self.fps))
 
     @staticmethod
     def _predict(s: _Slot) -> np.ndarray:
@@ -230,12 +256,13 @@ class IdentityAssigner:
         return dist / max(math.hypot(w, h), 1.0) + size + mismatch
 
     @staticmethod
-    def _observe(s: _Slot, d: Detection, *, moved: bool) -> None:
+    def _observe(s: _Slot, d: Detection, *, moved: bool, t: float | None = None) -> None:
         c = np.asarray(d.centroid, dtype=float)
         s.vel = c - s.pos if moved and s.pos is not None and not s.hidden else np.zeros(2)
         s.pos, s.box, s.kps = c, d.bbox, _kps(d)
         s.det_cls, s.conf = d.class_name, d.confidence
         s.hidden = 0
+        s.t = t
         s.age += 1
 
     def _slot_object(self, s: _Slot, track_id: int) -> TrackedObject:

@@ -786,20 +786,23 @@ class CVProcessor:
             # A snapshot: the dialog may edit the live settings' animals in place.
             self._identity_key = _identity_key(s)
             # ponytail: fps isn't plumbed into CVProcessor; assume 30.
+            fps = 30.0
             self._identity = IdentityAssigner(
                 [a["name"] for a in s.animals],
                 mode=s.identity_mode,
                 class_names=[a.get("class_name") for a in s.animals],
                 max_travel_px=s.identity_max_travel_px,
                 separation_px=s.identity_separation_px,
-                relabel_frames=round(s.identity_relabel_s * 30),
+                relabel_frames=round(s.identity_relabel_s * fps),
+                fps=fps,
             )
         return self._identity
 
     def clear_identity(self) -> None:
         """Forget who is who (the next trial names its animals afresh).
 
-        Only the identity assigner; trails, ByteTrack and zones are untouched.
+        The identity assigner and any per-animal classifiers' history; trails,
+        ByteTrack and zones are untouched.
         """
         with self._lock:
             self._identity = None
@@ -1068,7 +1071,7 @@ class CVProcessor:
             tracked = []
             if self._settings.tracking_enabled:
                 if identity:
-                    tracked = self._get_identity().update(detections)
+                    tracked = self._get_identity().update(detections, timestamp)
                 # ByteTrack provides its own tracking - convert detections to TrackedObjects
                 elif self._active_backend == DetectionBackend.YOLO_BYTETRACK:
                     tracked = self._bytetrack_to_tracked(detections)

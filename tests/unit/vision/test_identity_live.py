@@ -241,3 +241,48 @@ def test_seed_refuses_a_click_far_from_every_animal():
     # B's click is 150 px from the only free animal: unbound, not snapped to it.
     assert a.seed([det(100, 100), det(400, 100)], {"A": (100, 100), "B": (250, 100)}) == ["B"]
     assert not a.ready
+
+
+def test_fast_move_across_skipped_camera_frames_keeps_the_name():
+    # 30 fps camera, every 3rd frame processed: 50 px per step is ~17 px per
+    # camera frame, well inside the 40 px/frame reach.
+    a = IdentityAssigner(["A"], mode="continuity", fps=30)
+    a.update([det(100, 100)], timestamp=0.0)
+    assert a.seed([det(100, 100)], {"A": (100, 100)}) == []
+    t = 0.0
+    for step in range(1, 7):
+        t += 3 / 30
+        out = a.update([det(100 + 50 * step, 100)], timestamp=t)
+    for _ in range(200):
+        t += 3 / 30
+        out = a.update([det(400, 100)], timestamp=t)
+    assert rows(out) == [("A", 0, True, "", (400, 100))]
+
+
+def test_timed_hidden_never_jumps():
+    a = IdentityAssigner(["A"], mode="continuity", fps=30)
+    a.update([det(100, 100), det(400, 100)], timestamp=0.0)
+    a.seed([det(100, 100), det(400, 100)], {"A": (100, 100)})
+    for i in range(1, 61):
+        out = a.update([det(400, 100)], timestamp=i * 0.1)
+        assert rows(out) == [("A", 0, False, "gap", (100, 100)), (None, 1, True, "", (400, 100))]
+
+
+def test_timed_relabel_window_is_in_seconds():
+    # relabel after 5 camera frames of mismatch, even though only every 3rd
+    # frame is processed.
+    a = IdentityAssigner(
+        ["Dam", "Pup"], mode="appearance", class_names=["dam", "pup"], relabel_frames=5, fps=30
+    )
+    a.update([det(100, 100, "dam"), det(300, 100, "pup")], timestamp=0.0)
+    dets = [det(100, 100, "pup"), det(300, 100, "pup"), det(500, 300, "dam")]
+    assert rows(a.update(dets, timestamp=0.1))[0] == ("Dam", 0, True, "", (100, 100))
+    assert rows(a.update(dets, timestamp=0.2))[0] == ("Dam", 0, True, "", (100, 100))
+    assert rows(a.update(dets, timestamp=0.3))[0] == ("Dam", 0, True, "relabeled", (500, 300))
+
+
+def test_never_seen_appearance_slot_is_marked_unplaced():
+    a = IdentityAssigner(["Dam", "Pup"], mode="appearance", class_names=["dam", "pup"])
+    out = a.update([det(300, 100, "pup")])
+    dam = by_name(out)["Dam"]
+    assert dam.age == 0 and not dam.visible

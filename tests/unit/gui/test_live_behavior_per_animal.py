@@ -146,7 +146,7 @@ def test_cv_processor_forwards_events_and_needs_every_frame(tiny_behavior_model,
     monkeypatch.setattr(
         cv,
         "_get_identity",
-        lambda: type("I", (), {"update": lambda s, d: [_obj("Dam", _kps(k, 0, 1.0))]})(),
+        lambda: type("I", (), {"update": lambda s, d, t=None: [_obj("Dam", _kps(k, 0, 1.0))]})(),
     )
 
     got = []

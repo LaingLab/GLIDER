@@ -378,7 +378,7 @@ def test_identity_live_behavior_classifies_each_named_animal(
     monkeypatch.setattr(
         cv,
         "_get_identity",
-        lambda: type("I", (), {"update": lambda s, d: [_obj("Dam"), _obj("Pup")]})(),
+        lambda: type("I", (), {"update": lambda s, d, t=None: [_obj("Dam"), _obj("Pup")]})(),
     )
     cv.process_frame(np.zeros((8, 8, 3), np.uint8), 0.0)
     assert [e.animal for e in events] == ["Dam", "Pup"]
