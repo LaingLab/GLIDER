@@ -98,6 +98,7 @@ def test_cap_drops_oldest_and_logs_in_capture_order(panel, monkeypatch):
 
     monkeypatch.setattr(cp, "CV_QUEUE_CAP", 2)
     monkeypatch.setattr(type(panel._cv_processor), "needs_every_frame", True, raising=False)
+    monkeypatch.setattr(type(panel._cv_processor), "identity_active", True, raising=False)
     logged = _recording_logger(panel)
     for ts in (1.0, 2.0, 3.0, 4.0, 5.0):  # 1.0 in flight; 2.0, 3.0 evicted
         panel._submit_to_cv(_frame(ts))
@@ -106,6 +107,19 @@ def test_cap_drops_oldest_and_logs_in_capture_order(panel, monkeypatch):
     for _ in range(3):
         panel._process_cv_results_on_main_thread(_frame(panel._sent[-1]), [], [], None)
     assert logged == sorted(logged) == [1.0, 2.0, 3.0, 4.0, 5.0]
+
+
+def test_identity_without_classifier_logs_superseded_frames(panel, monkeypatch):
+    # Cap 1 (latest wins), but every camera frame still gets a log row, so the
+    # export can line rows up with video frames by timestamp.
+    monkeypatch.setattr(type(panel._cv_processor), "identity_active", True, raising=False)
+    monkeypatch.setattr(type(panel._cv_processor), "needs_every_frame", False, raising=False)
+    logged = _recording_logger(panel)
+    for ts in (1.0, 2.0, 3.0):  # 1.0 in flight; 2.0 superseded by 3.0
+        panel._submit_to_cv(_frame(ts))
+    panel._process_cv_results_on_main_thread(_frame(1.0), [], [], None)
+    panel._process_cv_results_on_main_thread(_frame(3.0), [], [], None)
+    assert logged == [1.0, 2.0, 3.0]
 
 
 def test_default_mode_supersede_is_not_logged(panel):

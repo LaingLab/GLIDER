@@ -1352,7 +1352,7 @@ class CameraPanel(QWidget):
                 "CV processing is slower than the camera; %d frames dropped",
                 self._cv_frames_dropped,
             )
-        if self._cv_processor.needs_every_frame:
+        if self._cv_processor.identity_active:
             self._cv_dropped_ts.append(frame_data.timestamp)
 
     def _update_cv_lag(self) -> None:

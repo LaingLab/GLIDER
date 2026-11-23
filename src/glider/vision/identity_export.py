@@ -3,11 +3,16 @@
 The offline per-animal tools (behaviour analysis, Session Review) read DLC
 CSVs found beside the video. This writes the same files a Batch Pose run would,
 so a recording made with identity on needs no special handling downstream.
+
+Rows are placed on video frames by capture timestamp, not by the logger's
+frame counter: video frame ``round((timestamp - t0) * fps)``, where ``t0`` is
+the capture time of the video's first frame.
 """
 
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -30,6 +35,7 @@ def export_live_identity(
     keypoint_names: list[str],
     fps: float,
     n_frames: int,
+    t0: float,
 ) -> list[Path]:
     """Write one DLC CSV per named animal (plus identity sidecar); never raises."""
     try:
@@ -42,13 +48,22 @@ def export_live_identity(
             keypoint_names,
             fps,
             n_frames,
+            t0,
         )
     except Exception:
         logger.exception("Could not export live identity run for %s", video)
         return []
 
 
-def _export(tracking_csv, keypoints_csv, video, model, names, keypoint_names, fps, n_frames):
+def _video_frames(timestamps, t0: float, fps: float):
+    """0-based video frame of each logger ISO timestamp (naive local time)."""
+    import pandas as pd
+
+    since = pd.to_datetime(timestamps) - pd.Timestamp(datetime.fromtimestamp(t0))
+    return (since.dt.total_seconds() * fps).round().astype(int)
+
+
+def _export(tracking_csv, keypoints_csv, video, model, names, keypoint_names, fps, n_frames, t0):
     import pandas as pd
 
     n_animals, n_kp = len(names), len(keypoint_names)
@@ -57,9 +72,10 @@ def _export(tracking_csv, keypoints_csv, video, model, names, keypoint_names, fp
     conf = np.full((n_animals, n_frames, n_kp), np.nan)
 
     kp = pd.read_csv(keypoints_csv)
-    kp = kp[(kp["object_id"] < n_animals) & (kp["frame"] >= 1) & (kp["frame"] <= n_frames)]
+    kp["vf"] = _video_frames(kp["timestamp"], t0, fps)
+    kp = kp[(kp["object_id"] < n_animals) & (kp["vf"] >= 0) & (kp["vf"] < n_frames)]
     for frame, oid, name, x, y, c in zip(
-        kp["frame"],
+        kp["vf"],
         kp["object_id"],
         kp["keypoint"],
         kp["x"],
@@ -69,23 +85,24 @@ def _export(tracking_csv, keypoints_csv, video, model, names, keypoint_names, fp
     ):
         k = kp_index.get(name)
         if k is not None:
-            xy[int(oid), int(frame) - 1, k] = (x, y)
-            conf[int(oid), int(frame) - 1, k] = c
+            xy[int(oid), int(frame), k] = (x, y)
+            conf[int(oid), int(frame), k] = c
 
     _, tracking = parse_csv(tracking_csv)
     slot_of = {n: i for i, n in enumerate(names)}
     seen = [set() for _ in names]  # 0-based frames with a row
     flags: list[tuple[int, int, str]] = []
     if "animal" in tracking.columns:
+        frames = _video_frames(tracking["timestamp"], t0, fps)
         for frame, animal, flag in zip(
-            tracking["frame"], tracking["animal"], tracking["identity_flag"], strict=True
+            frames, tracking["animal"], tracking["identity_flag"], strict=True
         ):
             slot = slot_of.get(animal)
-            if slot is None or not 1 <= frame <= n_frames:
+            if slot is None or not 0 <= frame < n_frames:
                 continue
-            seen[slot].add(int(frame) - 1)
+            seen[slot].add(int(frame))
             if isinstance(flag, str) and flag:
-                flags.append((int(frame) - 1, slot, flag))
+                flags.append((int(frame), slot, flag))
     for slot in range(n_animals):
         flags += [(f, slot, "gap") for f in range(n_frames) if f not in seen[slot]]
     flags.sort()

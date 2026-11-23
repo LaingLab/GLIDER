@@ -1346,28 +1346,37 @@ class GliderCore:
                     flow_duration_s=self.last_flow_duration_s
                 )
                 logger.info(f"Tracking data saved to: {tracking_path}")
-                self._export_identity(tracking_path, single_video)
+                await self._export_identity(tracking_path, single_video)
             except Exception as e:
                 logger.error(f"Failed to stop tracking logger: {e}")
 
-    def _export_identity(self, tracking_path: Path | None, video: Path | None) -> None:
-        """Lay a live identity run out as Batch Pose files beside its video."""
+    async def _export_identity(self, tracking_path: Path | None, video: Path | None) -> None:
+        """Lay a live identity run out as Batch Pose files beside its video.
+
+        Runs in a worker thread (it reads whole CSVs); never raises.
+        """
         cv = self._cv_processor
+        rec = self._video_recorder
         kp_path = self._tracking_logger.keypoints_file_path
+        t0 = rec.first_frame_timestamp
         if not (cv.identity_active and tracking_path and kp_path and video and video.exists()):
             return
-        from glider.vision.identity_export import export_live_identity
+        if t0 is None:  # no frame was ever written
+            return
+        from glider.vision import identity_export
 
         s = cv.settings
-        export_live_identity(
+        await asyncio.to_thread(
+            identity_export.export_live_identity,
             tracking_path,
             kp_path,
             video,
             Path(s.model_path or "model"),
             [a["name"] for a in s.animals],
             s.keypoint_names,
-            getattr(self._video_recorder, "_recording_fps", 30.0),
-            self._tracking_logger.frame_count,
+            rec.fps,
+            rec.frame_count,
+            t0,
         )
 
     async def _set_all_devices_low(self) -> None:

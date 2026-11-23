@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 
 import numpy as np
 
@@ -18,14 +19,27 @@ TRACK_HDR = (
 )
 
 
-def _write(tmp_path, rows):
-    """rows: (frame, object_id, animal, flag, nose_x)."""
+T0 = 1_700_000_000.0  # capture time of the video's first frame
+
+
+def _iso(video_frame):
+    """Logger-style ISO timestamp of 0-based video frame ``video_frame`` at 30 fps."""
+    ts = T0 + video_frame / 30.0
+    return datetime.fromtimestamp(ts).isoformat(timespec="milliseconds")
+
+
+def _write(tmp_path, rows, offset=0):
+    """rows: (log frame, object_id, animal, flag, nose_x).
+
+    Log frame ``f`` was captured at video frame ``f - 1 + offset``.
+    """
     t = ["# GLIDER Tracking Data", "# Experiment,x", "", TRACK_HDR]
     k = ["frame,timestamp,elapsed_ms,flow_elapsed_ms,object_id,keypoint,x,y,confidence"]
     for frame, oid, animal, flag, nx in rows:
-        t.append(f"{frame},0,0,0,{oid},mouse,0,0,1,1,.9,0,0,0,0,0,,0,{animal},{flag}")
+        ts = _iso(frame - 1 + offset)
+        t.append(f"{frame},{ts},0,0,{oid},mouse,0,0,1,1,.9,0,0,0,0,0,,0,{animal},{flag}")
         for name, dx in (("nose", nx), ("tail", nx + 1)):
-            k.append(f"{frame},0,0,0,{oid},{name},{dx},2.0,0.9")
+            k.append(f"{frame},{ts},0,0,{oid},{name},{dx},2.0,0.9")
     t.append("# Total Frames,4")
     (tmp_path / "r_tracking.csv").write_text("\n".join(t) + "\n")
     (tmp_path / "r_tracking_keypoints.csv").write_text("\n".join(k) + "\n")
@@ -34,10 +48,10 @@ def _write(tmp_path, rows):
     return tmp_path / "r_tracking.csv", tmp_path / "r_tracking_keypoints.csv", video
 
 
-def _run(tmp_path, rows, names):
-    tr, kp, video = _write(tmp_path, rows)
+def _run(tmp_path, rows, names, offset=0):
+    tr, kp, video = _write(tmp_path, rows, offset)
     model = tmp_path / "m.pt"
-    out = export_live_identity(tr, kp, video, model, names, KP, 30.0, 4)
+    out = export_live_identity(tr, kp, video, model, names, KP, 30.0, 4, T0)
     return out, video, model
 
 
@@ -93,5 +107,37 @@ def test_failure_is_logged_not_raised(tmp_path, caplog):
             KP,
             30.0,
             4,
+            T0,
         )
     assert out == [] and "Could not export" in caplog.text
+
+
+def test_rows_land_on_video_frames_by_timestamp(tmp_path):
+    # The logger started 2 frames before the video's first frame and skipped
+    # some frames: log frame numbers no longer match video frames.
+    rows = [
+        (1, 0, "A", "", 1),  # video frame -2: before the video, dropped
+        (2, 0, "A", "", 2),  # video frame -1: dropped
+        (3, 0, "A", "", 10),  # video frame 0
+        (5, 0, "A", "close", 12),  # video frame 2 (log frame 4 never logged)
+        (7, 0, "A", "", 14),  # video frame 4: past the 4-frame video, dropped
+    ]
+    out, video, model = _run(tmp_path, rows, ["A"], offset=-2)
+    a = from_dlc_csv(dlc_output_path(video, model))
+    assert a.xy.shape[0] == 4
+    assert a.xy[0, 0, 0] == 10 and a.xy[2, 0, 0] == 12
+    assert np.isnan(a.xy[1]).all() and np.isnan(a.xy[3]).all()
+
+
+def test_flags_land_on_video_frames_by_timestamp(tmp_path):
+    rows = [(1, 0, "A", "", 1), (2, 0, "A", "close", 10), (2, 1, "B", "", 50)]
+    _run(tmp_path, rows, ["A", "B"], offset=1)
+    side = (tmp_path / "rDLC_m_identity.csv").read_text().splitlines()
+    assert set(side[1:]) == {
+        "0,animal0,gap",
+        "0,animal1,gap",
+        "1,animal1,gap",
+        "2,animal0,close",
+        "3,animal0,gap",
+        "3,animal1,gap",
+    }
