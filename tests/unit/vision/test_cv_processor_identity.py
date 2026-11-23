@@ -143,3 +143,18 @@ def test_class_names_come_from_the_loaded_yolo_model():
     assert proc.class_names == []
     proc._yolo_model = MagicMock(names={0: "dam", 1: "pup"})
     assert proc.class_names == ["dam", "pup"]
+
+
+def test_overlay_names_each_animal_and_dims_a_hidden_one():
+    from glider.vision.cv_processor import TrackedObject
+
+    proc = CVProcessor(CVSettings(show_labels=False, show_trails=False))
+    seen = TrackedObject(0, "m", (10, 10, 40, 40), 0.9, (30, 30), animal="Dam")
+    hidden = TrackedObject(1, "m", (110, 10, 40, 40), 0.9, (130, 30), animal="Pup", visible=False)
+    out = proc.draw_overlays(_frame(), [], [seen, hidden])
+    color = np.array(proc.settings.overlay_color)
+    # A name is written at each centroid.
+    assert out[22:34, 30:60].any() and out[22:34, 130:160].any()
+    # The hidden animal is drawn, but never in the live overlay colour.
+    assert (out[10:52, 108:152] == color).all(axis=2).sum() == 0
+    assert (out[10:52, 8:52] == color).all(axis=2).sum() > 0

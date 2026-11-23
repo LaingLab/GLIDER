@@ -20,6 +20,8 @@ class Readiness:
     board_label: str
     experiment_label: str
     missing_field: str | None = None
+    #: Why live identity keeps Start disabled (folded into experiment_ready).
+    identity_message: str | None = None
 
     @property
     def all_ready(self) -> bool:
@@ -47,6 +49,21 @@ def _needs_no_board(session) -> bool:
     return hardware is not None and not hardware.boards
 
 
+def _identity_message(core) -> str | None:
+    """Why live identity is not ready to run, or None."""
+    cv = getattr(core, "cv_processor", None)
+    settings = getattr(cv, "settings", None)
+    mode = getattr(settings, "identity_mode", "off")
+    if mode not in ("appearance", "continuity") or getattr(settings, "enabled", False) is not True:
+        return None
+    reason = cv.identity_unavailable_reason
+    if reason:
+        return reason
+    if mode == "continuity" and not cv.identity_ready:
+        return "Name the animals on the camera view"
+    return None
+
+
 def compute_readiness(core) -> Readiness:
     hw = core.hardware_manager
     session = getattr(core, "session", None)
@@ -59,7 +76,8 @@ def compute_readiness(core) -> Readiness:
         board_ready = True
         board_label = "None needed"
 
-    experiment_ready = _has_runnable_flow(session)
+    identity_message = _identity_message(core)
+    experiment_ready = _has_runnable_flow(session) and identity_message is None
     experiment_label = ""
     if session is not None and getattr(session, "metadata", None) is not None:
         experiment_label = session.metadata.name or ""
@@ -76,4 +94,5 @@ def compute_readiness(core) -> Readiness:
         board_label=board_label,
         experiment_label=experiment_label,
         missing_field=missing,
+        identity_message=identity_message,
     )

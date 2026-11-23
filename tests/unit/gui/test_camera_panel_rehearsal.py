@@ -482,3 +482,60 @@ def test_a_rehearsal_stops_with_its_experiment(qtbot, state, stops):
     panel.on_experiment_state(state)
 
     assert bool(stopped) is stops
+
+
+# --- naming the animals on the first frame ---------------------------------------
+
+
+def test_naming_happens_on_the_first_frame_before_the_rehearsal_runs(qtbot, monkeypatch):
+    """Name at start, rehearsed: the operator clicks the animals on frame 0, and
+    neither the experiment nor the video starts until every name is placed."""
+    from unittest.mock import MagicMock
+
+    import glider.vision.video_pump as video_pump
+    from glider.vision.camera_manager import CameraManager
+    from glider.vision.cv_processor import CVProcessor, CVSettings, Detection, DetectionBackend
+
+    def _det(x):
+        return Detection(class_id=0, class_name="m", confidence=0.9, bbox=(x, 10, 10, 10))
+
+    cv = CVProcessor(
+        CVSettings(
+            backend=DetectionBackend.YOLO_V8,
+            identity_mode="continuity",
+            animals=[
+                {"name": "Mouse A", "class_name": None},
+                {"name": "Mouse B", "class_name": None},
+            ],
+        )
+    )
+    cv._initialized = True
+    cv._detect_yolo = MagicMock(side_effect=lambda *_a: [_det(0), _det(100)])
+    _QuietPump.started = []
+    monkeypatch.setattr(video_pump, "VideoPump", _QuietPump)
+    panel = CameraPanel(CameraManager(), cv)
+    qtbot.addWidget(panel)
+    panel._cv_enabled_cb.setChecked(True)
+    panel._init_cv = lambda: True
+    first = np.zeros((100, 200, 3), dtype=np.uint8)
+    read = []
+    panel._video_source.read_frame = lambda n: (read.append(n), first)[1]
+    panel._rehearsal_video = lambda: "/clips/session12.mp4"
+    panel._preview.to_frame = lambda x, y: (float(x), float(y))
+    requested = []
+    panel.rehearsal_requested.connect(requested.append)
+
+    panel._start_rehearsal()
+
+    assert read == [0]
+    assert panel._naming_label.text() == "Click Mouse A"
+    assert requested == [] and _QuietPump.started == []
+    assert not panel.naming_complete
+
+    panel._preview.frame_clicked.emit(5, 15)
+    panel._preview.frame_clicked.emit(105, 15)
+    assert requested == []
+    panel._naming_done_btn.click()
+
+    assert panel.naming_complete
+    assert requested == ["/clips/session12.mp4"]

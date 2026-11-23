@@ -218,3 +218,16 @@ def test_desktop_panel_keeps_its_clock_and_hint(qtbot, mock_core):
     panel.refresh()
     assert panel._timer.isVisibleTo(panel)
     assert "Hardware > Connect All" in panel._not_ready_hint.text()
+
+
+def test_hint_asks_to_name_the_animals(qtbot, mock_core):
+    from types import SimpleNamespace
+
+    mock_core.cv_processor = SimpleNamespace(
+        settings=SimpleNamespace(enabled=True, identity_mode="continuity"),
+        identity_unavailable_reason=None,
+        identity_ready=False,
+    )
+    panel = _panel(qtbot, mock_core, board=True, has_start=True)
+    assert not panel._start_btn.isEnabled()
+    assert panel._not_ready_hint.text() == "Name the animals on the camera view."

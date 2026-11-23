@@ -1426,13 +1426,20 @@ class CVProcessor:
         if tracked:
             for obj in tracked:
                 x, y, w, h = obj.bbox
-                cv2.rectangle(output, (x, y), (x + w, y + h), color, thickness)
+                # A hidden named animal is held at its last spot: drawn dimmed.
+                shade = color if obj.visible else (128, 128, 128)
+                cv2.rectangle(output, (x, y), (x + w, y + h), shade, thickness)
+                if obj.animal:
+                    cx, cy = (int(v) for v in obj.centroid)
+                    cv2.putText(
+                        output, obj.animal, (cx, cy), cv2.FONT_HERSHEY_SIMPLEX, 0.6, shade, 2
+                    )
 
                 if self._settings.show_labels:
                     label = f"ID:{obj.track_id} {obj.class_name}"
                     label_size, _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
                     cv2.rectangle(
-                        output, (x, y - label_size[1] - 10), (x + label_size[0], y), color, -1
+                        output, (x, y - label_size[1] - 10), (x + label_size[0], y), shade, -1
                     )
                     cv2.putText(
                         output, label, (x, y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1

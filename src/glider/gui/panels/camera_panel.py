@@ -153,6 +153,7 @@ class CameraPreviewWidget(QLabel):
         self._pose_kps: np.ndarray | None = None
         self._behavior_label = ""
         self._vocab: list[str] | None = None
+        self._frame_size: tuple[int, int] | None = None  # (w, h) of the last frame shown
         self.setText("No Camera")
         # Prevent the widget from resizing based on pixmap content
         self.setScaledContents(False)
@@ -222,6 +223,7 @@ class CameraPreviewWidget(QLabel):
     def update_frame(self, frame: np.ndarray) -> None:
         """Update display with new frame."""
         self._placeholder = False
+        self._frame_size = (frame.shape[1], frame.shape[0])
 
         # Draw the arena outline if enabled
         display_frame = frame
@@ -261,6 +263,19 @@ class CameraPreviewWidget(QLabel):
         )
         self.setPixmap(scaled)
 
+    def to_frame(self, x: int, y: int) -> tuple[float, float] | None:
+        """Map a widget click to frame pixels, undoing the centred aspect-fit
+        scaling of ``update_frame``. None off the picture (letterbox bars)."""
+        pm = self.pixmap()
+        if self._frame_size is None or pm is None or pm.isNull():
+            return None
+        fw, fh = self._frame_size
+        fx = (x - (self.width() - pm.width()) / 2) * fw / pm.width()
+        fy = (y - (self.height() - pm.height()) / 2) * fh / pm.height()
+        if not (0 <= fx < fw and 0 <= fy < fh):
+            return None
+        return fx, fy
+
     def show_placeholder(self, text: str = "No Camera") -> None:
         """Show placeholder text."""
         self._placeholder = True
@@ -299,6 +314,7 @@ class CameraPanel(QWidget):
     # then calls begin_rehearsal(path).
     rehearsal_requested = pyqtSignal(str)
     rehearsal_ended = pyqtSignal()  # the video ran out or was stopped
+    naming_changed = pyqtSignal()  # naming the animals began, progressed or finished
 
     # Thread-safe signals for frame updates (background thread -> main thread)
     _frame_received = pyqtSignal(object)  # FrameData for single camera
@@ -363,6 +379,12 @@ class CameraPanel(QWidget):
         self._behavior_worker: Any | None = None
         self._behavior_running = False
         self._rehearsal_pump: Any | None = None
+
+        # Naming the animals by click (identity "Name at start").
+        self._naming = False
+        self._placements: dict[str, tuple[float, float]] = {}
+        self._anonymous: list[tuple[float, float]] = []
+        self._pending_rehearsal: str | None = None  # played once naming is done
 
         # Video-file source state (offline tracking)
         from glider.vision.video_source import VideoFileSource
@@ -446,6 +468,21 @@ class CameraPanel(QWidget):
         status_layout.addWidget(self._resolution_label)
 
         layout.addWidget(status_frame)
+
+        # Naming the animals at run start. Outside _controls: the Run page,
+        # which hides the controls, is where this has to be done.
+        self._naming_bar = QWidget()
+        naming_row = QHBoxLayout(self._naming_bar)
+        naming_row.setContentsMargins(8, 0, 8, 0)
+        self._naming_label = QLabel()
+        self._naming_label.setWordWrap(True)
+        naming_row.addWidget(self._naming_label, 1)
+        self._naming_done_btn = QPushButton("Done (other animals unnamed)")
+        self._naming_done_btn.clicked.connect(self._finish_naming)
+        naming_row.addWidget(self._naming_done_btn)
+        self._naming_bar.setVisible(False)
+        layout.addWidget(self._naming_bar)
+        self._preview.frame_clicked.connect(self._on_preview_clicked)
 
         # Everything below the preview and its status line lives in one
         # container, so the Run page can hide the controls as a group.
@@ -769,7 +806,88 @@ class CameraPanel(QWidget):
         if self._cv_enabled_cb.isChecked() and not self._init_cv():
             return
 
+        if self._naming_needed():
+            # Name the animals on the first frame; the run and the video wait.
+            frame = self._video_source.read_frame(0)
+            if frame is None:
+                self._show_rehearse_status(f"Could not read {Path(path).name}.")
+                return
+            try:
+                dets, tracked, motion = self._cv_processor.process_frame(frame, time.time())
+            except Exception as exc:  # noqa: BLE001 - escaping a slot ends GLIDER
+                logger.exception("Could not track the first rehearsal frame")
+                self._show_rehearse_status(str(exc))
+                return
+            if self._overlay_cb.isChecked():
+                frame = self._cv_processor.draw_overlays(frame, dets, tracked, motion)
+            self._preview.update_frame(frame)
+            self._pending_rehearsal = path
+            self.begin_naming()
+            return
+
         self.rehearsal_requested.emit(path)
+
+    # --- naming the animals (identity "Name at start") ----------------------
+
+    def _naming_needed(self) -> bool:
+        cv = self._cv_processor
+        return (
+            self._cv_enabled_cb.isChecked()
+            and cv.identity_active
+            and cv.settings.identity_mode == "continuity"
+        )
+
+    @property
+    def naming_complete(self) -> bool:
+        """Every configured animal is placed (or naming does not apply)."""
+        return not self._naming and (not self._naming_needed() or self._cv_processor.identity_ready)
+
+    def _animal_names(self) -> list[str]:
+        return [a["name"] for a in self._cv_processor.settings.animals]
+
+    def begin_naming(self) -> None:
+        """Ask the operator to click each animal on the camera view."""
+        if not self._naming_needed():
+            return
+        self._naming = True
+        self._placements = {}
+        self._anonymous = []
+        self._update_naming()
+
+    def _update_naming(self, prefix: str = "") -> None:
+        unplaced = [n for n in self._animal_names() if n not in self._placements]
+        self._naming_label.setText(
+            prefix + (f"Click {unplaced[0]}" if unplaced else "Click any other animals, then Done")
+        )
+        self._naming_done_btn.setVisible(not unplaced)
+        self._naming_bar.setVisible(self._naming)
+        self.naming_changed.emit()
+
+    def _on_preview_clicked(self, x: int, y: int) -> None:
+        if not self._naming:
+            return
+        point = self._preview.to_frame(x, y)
+        if point is None:
+            return
+        unplaced = [n for n in self._animal_names() if n not in self._placements]
+        if unplaced:
+            self._placements[unplaced[0]] = point
+        else:
+            self._anonymous.append(point)
+        self._update_naming()
+
+    def _finish_naming(self) -> None:
+        unbound = self._cv_processor.seed_identity(self._placements, self._anonymous)
+        if unbound:
+            for name in unbound:
+                self._placements.pop(name, None)
+            self._update_naming("No animal there. ")
+            return
+        self._naming = False
+        self._update_naming()
+        path, self._pending_rehearsal = self._pending_rehearsal, None
+        if path:
+            self.rehearsal_requested.emit(path)
 
     def begin_rehearsal(self, path: str) -> bool:
         """Play a recording through the live path, hardware and all."""
@@ -1070,6 +1188,13 @@ class CameraPanel(QWidget):
 
         self._last_frame = display_frame
         self._preview.update_frame(display_frame)
+        if (
+            detections is not None
+            and not self._naming
+            and self._naming_needed()
+            and not self._cv_processor.identity_ready
+        ):
+            self.begin_naming()
 
         # Write annotated frame to video recorder if recording
         if annotated_frame is not None and self._video_recorder is not None:
@@ -1953,10 +2078,11 @@ class CameraPanel(QWidget):
         """
         if self._behavior_running:
             return
-        ready = (
-            self._behavior_pkl is not None
-            and self._pose_model_path is not None
-            and bool(self._parse_keypoint_names())
+        # With identity on, the CV worker classifies from its own keypoints
+        # (names from CV settings), so only the behaviour model is needed.
+        ready = self._behavior_pkl is not None and (
+            self._cv_processor.identity_active
+            or (self._pose_model_path is not None and bool(self._parse_keypoint_names()))
         )
         self._live_behavior_btn.setEnabled(ready)
 
@@ -1969,11 +2095,13 @@ class CameraPanel(QWidget):
 
     def _start_live_behavior(self) -> None:
         """Spin up the BehaviorInferenceWorker on its own thread and load models."""
-        names = self._parse_keypoint_names()
-        if self._behavior_pkl is None or self._pose_model_path is None or not names:
+        if self._behavior_pkl is None:
             return
         if self._cv_processor.identity_active:
             self._start_animal_behavior()
+            return
+        names = self._parse_keypoint_names()
+        if self._pose_model_path is None or not names:
             return
 
         from glider.gui.panels.live_behavior import BehaviorInferenceWorker
