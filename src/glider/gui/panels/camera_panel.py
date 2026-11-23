@@ -8,6 +8,7 @@ and quick access to camera settings.
 import asyncio
 import logging
 import time
+from collections import deque
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
@@ -51,6 +52,9 @@ if TYPE_CHECKING:
     from glider.vision.zones import ZoneConfiguration
 
 logger = logging.getLogger(__name__)
+
+# Frames that may wait for CV while per-animal behaviour needs every frame.
+CV_QUEUE_CAP = 300
 
 
 #: This panel's streaming claim on the shared MultiCameraManager. See
@@ -287,6 +291,7 @@ class CameraPanel(QWidget):
     """
 
     settings_requested = pyqtSignal()
+    cv_lag_changed = pyqtSignal(bool)  # over a second of frames queued for CV
     analysis_requested = pyqtSignal(str)  # output_dir → open the Analysis panel
     draw_zones_requested = pyqtSignal(object)  # scrubbed frame (np.ndarray) for the zone editor
     # Rehearse was clicked and the video and CV are ready. The host starts the
@@ -343,7 +348,8 @@ class CameraPanel(QWidget):
         self._frame_count = 0
         # Bounded hand-off to the CV worker (see _submit_to_cv).
         self._cv_in_flight = False
-        self._cv_pending: FrameData | None = None
+        self._cv_queue: deque[FrameData] = deque()
+        self._cv_lagging = False
         self._cv_frames_dropped = 0
 
         # --- Live behavior inference state ---
@@ -1098,34 +1104,52 @@ class CameraPanel(QWidget):
             self._dispatch_frame_tick(self._tracking_logger.frame_count, timestamp)
 
     def _submit_to_cv(self, frame_data: FrameData) -> None:
-        """Hand a frame to the CV worker, keeping at most one queued behind it.
+        """Hand a frame to the CV worker, queueing a bounded number behind it.
 
-        Each emit is a queued signal carrying a full frame copy, so a camera
-        faster than inference used to grow the queue without bound (~1 GB/min
-        at 640x480) until OOM. One frame is in flight; the newest arrival waits
-        in a single slot and replaces any older one, which is counted dropped.
+        Each emit is a queued signal carrying a full frame copy, so an unbounded
+        queue would grow until OOM. One frame is in flight. Normally one newer
+        frame waits and replaces any older one; while per-animal behaviour needs
+        every frame (streaming kinematics), up to CV_QUEUE_CAP wait, oldest
+        dropped first. A dropped frame is still logged empty so the frame index
+        keeps matching the video.
         """
         if self._cv_in_flight:
-            if self._cv_pending is not None:
-                self._cv_frames_dropped += 1
-                if self._cv_frames_dropped == 1 or self._cv_frames_dropped % 100 == 0:
-                    logger.warning(
-                        "CV processing is slower than the camera; %d frames dropped",
-                        self._cv_frames_dropped,
-                    )
-            self._cv_pending = frame_data
+            cap = CV_QUEUE_CAP if self._cv_processor.needs_every_frame else 1
+            while len(self._cv_queue) >= cap:
+                self._drop_frame(self._cv_queue.popleft())
+            self._cv_queue.append(frame_data)
+            self._update_cv_lag()
             return
         self._cv_in_flight = True
         # QueuedConnection: process_frame runs on the worker thread.
         self._process_frame_requested.emit(frame_data)
+
+    def _drop_frame(self, frame_data: FrameData) -> None:
+        self._cv_frames_dropped += 1
+        if self._cv_frames_dropped == 1 or self._cv_frames_dropped % 100 == 0:
+            logger.warning(
+                "CV processing is slower than the camera; %d frames dropped",
+                self._cv_frames_dropped,
+            )
+        if self._tracking_logger is not None and self._tracking_logger.is_recording:
+            self._tracking_logger.log_frame(frame_data.timestamp, [])
+            self._dispatch_frame_tick(self._tracking_logger.frame_count, frame_data.timestamp)
+
+    def _update_cv_lag(self) -> None:
+        """Emit cv_lag_changed when over a second of frames (by fps) is queued."""
+        lagging = len(self._cv_queue) > (self.current_fps() or 30.0)
+        if lagging != self._cv_lagging:
+            self._cv_lagging = lagging
+            self.cv_lag_changed.emit(lagging)
 
     def _process_cv_results_on_main_thread(
         self, frame_data: FrameData, detections: list, tracked: list, motion: Any
     ) -> None:
         """Handle results from CV worker on main thread."""
         self._cv_in_flight = False
-        pending, self._cv_pending = self._cv_pending, None
-        if pending is not None:
+        if self._cv_queue:
+            pending = self._cv_queue.popleft()
+            self._update_cv_lag()
             self._submit_to_cv(pending)
         if frame_data.camera_id:
             self._process_multi_frame_on_main_thread(frame_data, detections, tracked, motion)

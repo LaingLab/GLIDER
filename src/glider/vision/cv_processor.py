@@ -265,6 +265,9 @@ class TrackedObject:
             "centroid": self.centroid,
             "age": self.age,
             "velocity": self.velocity,
+            "animal": self.animal,
+            "visible": self.visible,
+            "identity_flag": self.identity_flag,
         }
         if self.keypoints is not None:
             result["keypoints"] = self.keypoints.tolist()

@@ -111,6 +111,9 @@ class TrackingDataLogger:
         # Opened lazily on the first frame that actually carries keypoints,
         # so background-subtraction sessions never produce an empty file.
         self._keypoint_names: list[str] = []
+        # Trailing ``animal,identity_flag`` columns; only when identity is on,
+        # so the default header stays byte-identical.
+        self._identity_columns = False
         # Annotated, unlike the tracking-CSV handles above: those are bare
         # ``= None`` so mypy infers None and every writerow on them errors
         # (32 pre-existing errors in this file). Not fixing that here, but not
@@ -193,6 +196,10 @@ class TrackingDataLogger:
     def keypoint_row_count(self) -> int:
         """Number of keypoint rows written this session."""
         return self._kp_row_count
+
+    def set_identity_columns(self, enabled: bool) -> None:
+        """Add trailing ``animal,identity_flag`` columns; call before start()."""
+        self._identity_columns = bool(enabled)
 
     def set_keypoint_names(self, names: list[str] | None) -> None:
         """Set bodypart names used to label rows in the keypoints CSV.
@@ -679,6 +686,7 @@ class TrackingDataLogger:
                 "cumulative_mm",
                 "zone_ids",
                 "velocity_px_frame",
+                *(["animal", "identity_flag"] if self._identity_columns else []),
             ]
         )
         # Force fsync on the header row so the file is durable on disk before
@@ -725,6 +733,8 @@ class TrackingDataLogger:
             return
 
         self._frame_count += 1
+        # A hidden named animal sits at its frozen spot: no row in either CSV.
+        tracked_objects = [o for o in tracked_objects if getattr(o, "visible", True)]
 
         # Debug: Log when we actually write data
         if tracked_objects or motion_detected:
@@ -806,6 +816,11 @@ class TrackingDataLogger:
                     f"{cumulative_mm:.2f}",
                     zone_ids,
                     f"{velocity:.2f}",
+                    *(
+                        [getattr(obj, "animal", None) or "", getattr(obj, "identity_flag", "")]
+                        if self._identity_columns
+                        else []
+                    ),
                 ],
                 context="log_frame[object]",
             ):
@@ -839,6 +854,7 @@ class TrackingDataLogger:
                     "",  # Empty distance fields
                     "",  # Empty zone_ids
                     "",  # Empty velocity
+                    *(["", ""] if self._identity_columns else []),
                 ],
                 context="log_frame[motion]",
             )
@@ -868,6 +884,7 @@ class TrackingDataLogger:
                         "",  # Empty distance fields
                         "",  # Empty zone_ids
                         "",  # Empty velocity
+                        *(["", ""] if self._identity_columns else []),
                     ],
                     context="log_frame[heartbeat]",
                 )

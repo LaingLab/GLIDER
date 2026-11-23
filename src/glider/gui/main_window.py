@@ -4139,7 +4139,8 @@ class MainWindow(QMainWindow):
             bool(self._core.data_recorder.is_recording)
             and getattr(self, "_last_session_state", None) == "RUNNING"
         )
-        self._dashboard_view.set_health(fps, dropped, recording)
+        lagging = bool(self._camera_panel is not None and self._camera_panel._cv_lagging)
+        self._dashboard_view.set_health(fps, dropped, recording, lagging)
 
     def _run_base_dir(self) -> Path:
         from glider.first_run import default_data_dir

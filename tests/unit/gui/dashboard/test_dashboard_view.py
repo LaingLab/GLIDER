@@ -62,3 +62,8 @@ def test_health_overlay(view):
     assert view._fps.text() == "-- fps"
     assert view._dropped.property("warn") is True
     assert not view._rec.isVisibleTo(view)
+
+
+def test_health_overlay_cv_lagging(view):
+    view.set_health(30.0, 0, recording=False, cv_lagging=True)
+    assert "CV lagging" in view._fps.text()

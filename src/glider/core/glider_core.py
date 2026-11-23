@@ -1150,6 +1150,7 @@ class GliderCore:
                 # here rather than at the settings dialog so it holds however
                 # the settings arrived — dialog, .glider load, or default.
                 self._tracking_logger.set_keypoint_names(self._cv_processor.settings.keypoint_names)
+                self._tracking_logger.set_identity_columns(self._cv_processor.identity_active)
                 tracking_path = await self._tracking_logger.start(
                     experiment_name, session=self._session
                 )
