@@ -526,6 +526,9 @@ class ZoneTracker:
 
         # Check each tracked object against each zone
         for obj in tracked_objects:
+            # A named animal never observed yet has no position: in no zone.
+            if not getattr(obj, "visible", True) and not getattr(obj, "age", 1):
+                continue
             # Get object center
             if hasattr(obj, "centroid"):
                 cx, cy = obj.centroid

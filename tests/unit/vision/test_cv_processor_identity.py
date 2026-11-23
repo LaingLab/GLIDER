@@ -166,3 +166,33 @@ def test_clear_identity_drops_only_the_seed():
     proc.clear_identity()
     assert not proc.identity_ready
     assert proc._trail_history[7] == [(1, 1)]
+
+
+def test_clear_identity_resets_the_animal_classifiers():
+    proc = _seeded()
+    clf = MagicMock()
+    proc.set_animal_classifiers(clf)
+    proc.clear_identity()
+    clf.reset.assert_called_once_with()
+
+
+def test_never_seen_animal_is_not_in_any_zone():
+    from glider.vision.zones import Zone, ZoneConfiguration, ZoneShape
+
+    s = CVSettings(
+        backend=DetectionBackend.YOLO_BYTETRACK,
+        identity_mode="appearance",
+        animals=[{"name": "Dam", "class_name": "dam"}, {"name": "Pup", "class_name": "pup"}],
+    )
+    proc = CVProcessor(s)
+    proc._initialized = True
+    proc._active_backend = DetectionBackend.YOLO_BYTETRACK
+    pup = Detection(class_id=1, class_name="pup", confidence=0.9, bbox=(150, 80, 10, 10))
+    proc._detect_yolo = MagicMock(return_value=[pup])
+    zt = ZoneTracker()
+    zone = Zone(id="z", name="corner", shape=ZoneShape.RECTANGLE, vertices=[(0, 0), (0.2, 0.2)])
+    zt.set_zone_configuration(ZoneConfiguration(zones=[zone]))
+    proc._zone_tracker = zt
+    proc.process_frame(_frame(), 0.0)
+    state = zt.get_zone_state("z")
+    assert not state.occupied and not state.entered and state.object_count == 0

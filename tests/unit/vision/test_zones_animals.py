@@ -13,6 +13,7 @@ def _obj(tid, animal, visible=True, xy=(50, 50)):
         centroid=xy,
         animal=animal,
         visible=visible,
+        age=1,  # observed at least once (a never-seen slot is in no zone)
     )
 
 

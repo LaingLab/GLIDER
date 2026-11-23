@@ -806,6 +806,8 @@ class CVProcessor:
         """
         with self._lock:
             self._identity = None
+            if self._animal_classifier is not None:
+                self._animal_classifier.reset()
 
     def seed_identity(
         self,
