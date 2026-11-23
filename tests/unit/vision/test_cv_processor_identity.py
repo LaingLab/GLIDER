@@ -196,3 +196,10 @@ def test_never_seen_animal_is_not_in_any_zone():
     proc.process_frame(_frame(), 0.0)
     state = zt.get_zone_state("z")
     assert not state.occupied and not state.entered and state.object_count == 0
+
+
+def test_from_dict_drops_animals_without_a_name():
+    s = CVSettings.from_dict(
+        {"animals": [{"name": "A"}, {"name": "  "}, {"class_name": "pup"}, {"name": "B"}]}
+    )
+    assert [a["name"] for a in s.animals] == ["A", "B"]

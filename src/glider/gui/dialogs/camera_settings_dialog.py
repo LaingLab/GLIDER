@@ -1100,11 +1100,32 @@ class CameraSettingsDialog(QDialog):
 
     def _apply_settings(self):
         """Apply settings without closing dialog."""
-        self._save_settings()
-        logger.info("Camera settings applied")
+        if self._save_settings():
+            logger.info("Camera settings applied")
 
-    def _save_settings(self):
-        """Save UI values to settings objects."""
+    def _identity_problem(self) -> str | None:
+        """Why the Identity section can't be saved as entered, or None."""
+        mode = self._identity_mode_combo.currentData()
+        if mode == "off":  # the animals table is hidden; nothing to fix there
+            return None
+        names = [
+            (self._animals_table.item(row, 0) or QTableWidgetItem()).text().strip()
+            for row in range(self._animals_table.rowCount())
+        ]
+        names = [n for n in names if n]
+        dupes = sorted({n for n in names if names.count(n) > 1})
+        if dupes:
+            return "Each animal needs its own name; used more than once: " + ", ".join(dupes)
+        if mode == "continuity" and not names:
+            return "Name at start needs at least one named animal."
+        return None
+
+    def _save_settings(self) -> bool:
+        """Save UI values to settings objects; False (nothing saved) if invalid."""
+        problem = self._identity_problem()
+        if problem:
+            QMessageBox.warning(self, "Identity", problem)
+            return False
         # Camera settings
         self._camera_settings.resolution = self._resolution_combo.currentData()
         self._camera_settings.fps = self._fps_spin.value()
@@ -1165,11 +1186,12 @@ class CameraSettingsDialog(QDialog):
         self._cv_settings.identity_max_travel_px = self._identity_travel_spin.value()
         self._cv_settings.draw_overlays = self._draw_overlays_cb.isChecked()
         self._cv_settings.show_keypoints = self._show_keypoints_cb.isChecked()
+        return True
 
     def accept(self):
         """Handle dialog acceptance."""
-        self._save_settings()
-        super().accept()
+        if self._save_settings():
+            super().accept()
 
     def get_camera_settings(self) -> CameraSettings:
         """Get the camera settings."""

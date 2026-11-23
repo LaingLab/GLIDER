@@ -100,3 +100,35 @@ def test_mode_disabled_with_the_reason_off_yolo(qtbot):
     d._backend_combo.setCurrentIndex(d._backend_combo.findData(DetectionBackend.YOLO_V8))
     assert d._identity_mode_combo.isEnabled()
     assert d._identity_mode_combo.toolTip() == ""
+
+
+@pytest.fixture
+def warnings_shown(monkeypatch):
+    import glider.gui.dialogs.camera_settings_dialog as csd
+
+    shown = []
+    monkeypatch.setattr(csd.QMessageBox, "warning", lambda *a, **k: shown.append(a[2]))
+    return shown
+
+
+def test_duplicate_names_are_refused(qtbot, warnings_shown):
+    d = _dialog(qtbot, identity_mode="continuity", animals=[{"name": "A", "class_name": None}])
+    d._add_animal_btn.click()
+    d._animals_table.item(1, 0).setText(" A ")
+    d.accept()
+    assert d.result() == 0 and "A" in warnings_shown[0]
+    assert d.get_cv_settings().animals == [{"name": "A", "class_name": None}]
+
+
+def test_name_at_start_without_animals_is_refused(qtbot, warnings_shown):
+    d = _dialog(qtbot)
+    _set_mode(d, "continuity")
+    d.accept()
+    assert d.result() == 0 and len(warnings_shown) == 1
+    assert d.get_cv_settings().identity_mode == "off"
+
+
+def test_valid_identity_settings_are_accepted(qtbot, warnings_shown):
+    d = _dialog(qtbot, identity_mode="continuity", animals=[{"name": "A", "class_name": None}])
+    d.accept()
+    assert d.result() == 1 and warnings_shown == []

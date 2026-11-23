@@ -431,7 +431,12 @@ class CVSettings:
             identity_mode=(
                 data["identity_mode"] if data.get("identity_mode") in IDENTITY_MODES else "off"
             ),
-            animals=[dict(a) for a in data.get("animals", [])],
+            # An animal with no name can't be referenced or exported: drop it.
+            animals=[
+                dict(a)
+                for a in data.get("animals", [])
+                if isinstance(a, dict) and str(a.get("name") or "").strip()
+            ],
             identity_separation_px=data.get("identity_separation_px", 60.0),
             identity_relabel_s=data.get("identity_relabel_s", 0.5),
             identity_max_travel_px=data.get("identity_max_travel_px", 40.0),
