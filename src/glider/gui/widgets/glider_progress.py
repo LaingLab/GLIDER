@@ -30,13 +30,14 @@ _FAR = QColor(colors.TEXT_MUTED)
 _DIM = QColor(colors.TEXT_DISABLED)
 _EYE = QColor(colors.BASE)
 _NOSE = QColor("#c98a8a")
+_EAR = QColor("#cbd5e1")
 _TRACK = QColor(colors.BORDER)
 _FILL = QColor(colors.ACCENT)
 
 # Mouse model units: nose at +x, feet at about +42, ears at about -40.
-_FEET = 42.0
-_TAIL = 140.0
-_NOSE_X = 112.0
+_FEET = 38.0
+_TAIL = 126.0
+_NOSE_X = 108.0
 
 
 class GliderProgress(QProgressBar):
@@ -149,55 +150,85 @@ class GliderProgress(QProgressBar):
         p.end()
 
 
-def _leg(p: QPainter, x: float, y: float, phase: float, color: QColor) -> None:
-    # Thigh swings; shin folds back on the return so the foot lifts.
-    a = math.sin(phase) * 0.7
-    k = a - 0.5 - max(0.0, math.cos(phase)) * 0.9
-    knee = QPointF(x + math.sin(a) * 16, y + math.cos(a) * 16)
-    foot = knee + QPointF(math.sin(k) * 15, math.cos(k) * 15)
-    pen = QPen(color, 7, cap=Qt.PenCapStyle.RoundCap, join=Qt.PenJoinStyle.RoundJoin)
-    p.setPen(pen)
+def _limb(
+    p: QPainter,
+    hip: QPointF,
+    phase: float,
+    upper: float,
+    lower: float,
+    width: float,
+    color: QColor,
+) -> None:
+    """A two-joint leg with a little foot; the knee folds as the leg comes forward."""
+    swing = math.sin(phase) * 0.75  # radians off vertical, + is forward
+    fold = 0.3 + max(0.0, math.cos(phase)) * 1.1  # lifts the foot on the recovery
+    knee = hip + QPointF(math.sin(swing) * upper, math.cos(swing) * upper)
+    shin = swing - fold
+    ankle = knee + QPointF(math.sin(shin) * lower, math.cos(shin) * lower)
+    toe = ankle + QPointF(width * 1.3, 0)
+    p.setPen(QPen(color, width, cap=Qt.PenCapStyle.RoundCap, join=Qt.PenJoinStyle.RoundJoin))
     p.setBrush(Qt.BrushStyle.NoBrush)
-    p.drawPolyline([QPointF(x, y), knee, foot])
+    p.drawPolyline([hip, knee, ankle, toe])
+
+
+def _body() -> QPainterPath:
+    """One silhouette, snout to rump, so the head and body don't read as parts."""
+    path = QPainterPath(QPointF(96, 4))
+    path.cubicTo(82, -10, 64, -22, 40, -26)  # snout up to the forehead
+    path.cubicTo(10, -34, -30, -36, -52, -18)  # back arch
+    path.cubicTo(-66, -6, -60, 16, -40, 22)  # rump
+    path.cubicTo(-10, 28, 30, 24, 58, 16)  # belly
+    path.cubicTo(74, 12, 88, 10, 96, 4)  # chin
+    path.closeSubpath()
+    return path
+
+
+_BODY = _body()
 
 
 def _draw_mouse(p: QPainter, x: float, y: float, scale: float, tick: int) -> None:
     """Side-view mouse facing right, body centre at (x, y), in model units * scale."""
     ph = tick / STRIDE_FRAMES * 2 * math.pi
-    bounce = -abs(math.sin(ph)) * 5
-    sway = math.sin(ph * 0.5) * 6
+    bounce = -abs(math.sin(ph)) * 4
+    pitch = math.sin(ph) * 3  # nose dips as the hind legs push
+    sway = math.sin(ph * 0.5) * 5
     p.save()
     p.translate(x, y + bounce * scale)
     p.scale(scale, scale)
+    p.rotate(pitch)
 
-    _leg(p, -34, 10, ph + 0.5, _FAR)
-    _leg(p, 30, 12, ph + math.pi + 0.5, _FAR)
+    # far side first, dimmer: a gallop, hind pair together, fronts opposite
+    _limb(p, QPointF(-34, 12), ph + 0.4, 14, 13, 7, _FAR)
+    _limb(p, QPointF(42, 14), ph + math.pi + 0.4, 11, 10, 5, _FAR)
 
-    tail = QPainterPath(QPointF(-52, 0))
-    tail.cubicTo(-85, -12 + sway, -105, 18 - sway, -140, 4 + sway)
-    p.setPen(QPen(_FG, 4, cap=Qt.PenCapStyle.RoundCap))
+    tail = QPainterPath(QPointF(-56, 8))
+    tail.cubicTo(-80, 16 + sway, -100, -2 - sway, -126, 6 + sway)
+    p.setPen(QPen(_FG, 3, cap=Qt.PenCapStyle.RoundCap))
     p.setBrush(Qt.BrushStyle.NoBrush)
     p.drawPath(tail)
 
     p.setPen(Qt.PenStyle.NoPen)
     p.setBrush(_FG)
-    p.drawEllipse(QPointF(-4, -2), 54, 28)
-    head = QPainterPath(QPointF(28, -24))
-    head.quadTo(70, -24, 92, 2)
-    head.quadTo(70, 14, 30, 18)
-    head.closeSubpath()
-    p.drawPath(head)
-    p.drawEllipse(QPointF(44, -26), 14, 14)
-    p.setBrush(_DIM)
-    p.drawEllipse(QPointF(44, -26), 7, 7)
-    p.setBrush(_EYE)
-    p.drawEllipse(QPointF(66, -6), 4, 4)
-    p.setBrush(_NOSE)
-    p.drawEllipse(QPointF(92, 2), 4, 4)
-    p.setPen(QPen(_FAR, 1.5, cap=Qt.PenCapStyle.RoundCap))
-    p.drawLine(QPointF(86, 4), QPointF(112, -2))
-    p.drawLine(QPointF(86, 6), QPointF(112, 8))
+    p.drawPath(_BODY)
 
-    _leg(p, -34, 10, ph, _FG)
-    _leg(p, 30, 12, ph + math.pi, _FG)
+    # ear: a shade off the body, tilted back, its base sunk into the head
+    p.save()
+    p.translate(28, -26)
+    p.rotate(-18)
+    p.setBrush(_EAR)
+    p.drawEllipse(QPointF(0, -4), 12, 15)
+    p.setBrush(_NOSE)
+    p.drawEllipse(QPointF(0, -5), 6, 9)
+    p.restore()
+
+    p.setBrush(_EYE)
+    p.drawEllipse(QPointF(62, -8), 3.5, 3.5)
+    p.setBrush(_NOSE)
+    p.drawEllipse(QPointF(96, 3), 3.5, 3.5)
+    p.setPen(QPen(_FAR, 1.2, cap=Qt.PenCapStyle.RoundCap))
+    p.drawLine(QPointF(84, 2), QPointF(108, -4))
+    p.drawLine(QPointF(84, 5), QPointF(108, 7))
+
+    _limb(p, QPointF(-30, 14), ph, 14, 13, 7, _FG)
+    _limb(p, QPointF(46, 14), ph + math.pi, 11, 10, 5, _FG)
     p.restore()
