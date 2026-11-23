@@ -236,6 +236,7 @@ PINNED += [
     ("VideoPlayback", "monitor_index", -1),
     ("ZoneInput", "zone_id", ""),
     ("ZoneInput", "zone_name", "Unnamed Zone"),
+    ("ZoneInput", "animal", ""),
     ("BehaviorInput", "target_behavior", ""),
     ("BehaviorInput", "min_frames", 5),
 ]

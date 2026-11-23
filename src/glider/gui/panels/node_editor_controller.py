@@ -158,7 +158,10 @@ class NodeEditorController(QObject):
             "StartFunction": ([], [">next"]),
             "EndFunction": ([">exec"], []),
             "FunctionCall": ([">exec"], [">next"]),
-            "ZoneInput": ([], ["Occupied", "Object Count", ">On Enter", ">On Exit"]),
+            "ZoneInput": (
+                [],
+                ["Occupied", "Object Count", ">On Enter", ">On Exit", "Visible"],
+            ),
             "BehaviorInput": ([], ["Active", "Behavior", ">On Enter", ">On Exit"]),
         }
 
@@ -528,6 +531,28 @@ class NodeEditorController(QObject):
                 note.setProperty("textRole", "muted")
                 note.setWordWrap(True)
                 props_layout.addRow(note)
+
+        elif node_type == "ZoneInput":
+            self._add_section_header(props_layout, "ZONE")
+            saved_state = (node_config.state if node_config else None) or {}
+            animal_combo = QComboBox()
+            animal_combo.setEditable(True)
+            animal_combo.addItem("Any")
+            animal_combo.addItems(self._known_animals())
+            animal_combo.setCurrentText(saved_state.get("animal") or "Any")
+            animal_combo.currentTextChanged.connect(
+                lambda txt, nid=node_id: self._on_node_property_changed(
+                    nid, "animal", "" if txt.strip() in ("", "Any") else txt.strip()
+                )
+            )
+            props_layout.addRow("Animal:", animal_combo)
+            note = QLabel(
+                "Pick a named animal to react only to it "
+                "(set names in Camera settings \u2192 Identity)."
+            )
+            note.setProperty("textRole", "muted")
+            note.setWordWrap(True)
+            props_layout.addRow(note)
 
         elif node_type == "BehaviorInput":
             self._add_section_header(props_layout, "BEHAVIOR")
@@ -1360,6 +1385,13 @@ class NodeEditorController(QObject):
                 signal.connect(_save)
                 return
         logger.debug("No change signal found for schema widget %r (%s)", key, ftype)
+
+    def _known_animals(self) -> list[str]:
+        """Names set in Camera settings -> Identity; empty if unavailable."""
+        try:
+            return [a["name"] for a in self._core.cv_processor.settings.animals if a.get("name")]
+        except Exception:  # noqa: BLE001 - a missing list must not break the panel
+            return []
 
     def _known_behaviors(self) -> list[str]:
         """Labels the currently loaded behavior model can emit, if any.

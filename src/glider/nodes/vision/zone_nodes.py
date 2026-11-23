@@ -6,6 +6,9 @@ Each zone can have its own ZoneInputNode that outputs:
 - Object Count: int number of objects in the zone
 - On Enter: exec triggered when the zone goes from empty to occupied
 - On Exit: exec triggered when the zone goes from occupied to empty
+- Visible: whether the chosen animal is seen (always True for Any)
+
+With an Animal set, the node follows only that named animal.
 """
 
 import asyncio
@@ -56,6 +59,11 @@ class ZoneInputNode(InterfaceNode):
                 port_type=PortType.EXEC,
                 description="Triggered when the zone goes from occupied to empty",
             ),
+            PortDefinition(
+                name="Visible",
+                data_type=bool,
+                description="True while the chosen animal is seen (always True for Any)",
+            ),
         ],
         color="#5a4a2d",  # Orange - interface color
     )
@@ -75,12 +83,20 @@ class ZoneInputNode(InterfaceNode):
             "default": "Unnamed Zone",
             "help": "Display name of the zone.",
         },
+        {
+            "key": "animal",
+            "label": "Animal",
+            "type": "str",
+            "default": "",
+            "help": "React only to this named animal. Empty means any animal.",
+        },
     ]
 
     def __init__(self):
         super().__init__()
         self._zone_id: str = self.setting("zone_id")
         self._zone_name: str = self.setting("zone_name")
+        self._animal: str = self.setting("animal")
         self._occupied = False
         self._object_count = 0
         self._exec_callbacks: list[Callable[[int], None]] = []
@@ -89,7 +105,7 @@ class ZoneInputNode(InterfaceNode):
         self._subscribed = False
 
         # Set outputs to initial values
-        self._outputs = [False, 0, None, None]
+        self._outputs = [False, 0, None, None, True]
 
     async def start(self) -> None:
         """Capture the main event loop and subscribe to the live signal bus.
@@ -134,8 +150,17 @@ class ZoneInputNode(InterfaceNode):
     def handle_zone_states(self, states: dict[str, Any]) -> None:
         """One frame's ``{zone_id: ZoneState}`` from the CV processor."""
         state = states.get(self._zone_id)
-        if state is not None:
+        if state is None:
+            return
+        if not self._animal:
+            self.set_output(4, True)
             self.update_zone_state(state.occupied, state.object_count)
+            return
+        # A hidden animal stays in state.animals at its last spot, so it holds
+        # Occupied and does not fire On Exit.
+        here = self._animal in state.animals
+        self.set_output(4, self._animal in state.visible_animals)
+        self.update_zone_state(here, int(here))
 
     @property
     def zone_id(self) -> str:
@@ -228,12 +253,14 @@ class ZoneInputNode(InterfaceNode):
         state = super().get_state()
         state["zone_id"] = self._zone_id
         state["zone_name"] = self._zone_name
+        state["animal"] = self._animal
         return state
 
     def set_state(self, state: dict[str, Any]) -> None:
         super().set_state(state)
         self._zone_id = self.setting("zone_id")
         self._zone_name = self.setting("zone_name")
+        self._animal = self.setting("animal")
 
     def get_display_name(self) -> str:
         """Get the display name for this node instance."""
