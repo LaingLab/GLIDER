@@ -252,6 +252,9 @@ class TrackedObject:
     disappeared: int = 0  # Frames since last seen
     velocity: float = 0.0  # Current velocity in pixels/frame
     keypoints: np.ndarray | None = None  # Nx2 or Nx3 array of keypoint coords
+    animal: str | None = None  # identity name; None = unnamed
+    visible: bool = True  # False = named animal hidden, held at last seen spot
+    identity_flag: str = ""  # "close+stitched+gap+relabeled" subset; "" = certain
 
     def to_dict(self) -> dict[str, Any]:
         result = {
