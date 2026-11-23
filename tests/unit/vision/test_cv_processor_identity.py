@@ -5,6 +5,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 import numpy as np
+import pytest
 
 from glider.vision.cv_processor import CVProcessor, CVSettings, Detection, DetectionBackend
 from glider.vision.zones import ZoneTracker
@@ -96,3 +97,49 @@ def test_zone_tracker_receives_the_hidden_animal_at_its_frozen_spot():
     tracked = proc._zone_tracker.update.call_args.args[0]
     hidden = [t for t in tracked if not t.visible]
     assert len(hidden) == 1 and hidden[0].centroid == (105, 15)
+
+
+def _seeded():
+    proc = _proc(mode="continuity")
+    proc.process_frame(_frame(), 0.0)
+    proc.seed_identity({"A": (5, 15), "B": (105, 15)}, [])
+    assert proc.identity_ready
+    return proc
+
+
+@pytest.mark.parametrize(
+    "field, value",
+    [
+        ("identity_separation_px", 80.0),
+        ("identity_relabel_s", 1.0),
+        ("identity_max_travel_px", 20.0),
+    ],
+)
+def test_changing_an_identity_tuning_rebuilds_the_assigner(field, value):
+    proc = _seeded()
+    s = proc.settings.copy()
+    setattr(s, field, value)
+    proc.update_settings(s)
+    assert not proc.identity_ready
+
+
+def test_animals_edited_in_place_still_rebuild_the_assigner():
+    proc = _seeded()
+    proc.settings.animals[0]["name"] = "Z"  # the live list, mutated in place
+    proc.update_settings(proc.settings)
+    assert not proc.identity_ready
+
+
+def test_an_unrelated_change_keeps_the_seed():
+    proc = _seeded()
+    s = proc.settings.copy()
+    s.confidence_threshold = 0.3
+    proc.update_settings(s)
+    assert proc.identity_ready
+
+
+def test_class_names_come_from_the_loaded_yolo_model():
+    proc = _proc()
+    assert proc.class_names == []
+    proc._yolo_model = MagicMock(names={0: "dam", 1: "pup"})
+    assert proc.class_names == ["dam", "pup"]

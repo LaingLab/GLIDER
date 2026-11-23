@@ -165,6 +165,13 @@ def _resolve_device_for_yolo() -> str:
 IDENTITY_MODES = ("off", "appearance", "continuity")
 
 
+def identity_unsupported_reason(backend: "DetectionBackend") -> str | None:
+    """Why *backend* cannot name animals, or None for the YOLO backends."""
+    if backend in (DetectionBackend.YOLO_V8, DetectionBackend.YOLO_BYTETRACK):
+        return None
+    return f"Identity needs a YOLO model; the active backend is {backend.name}."
+
+
 class DetectionBackend(Enum):
     """Available detection backends."""
 
@@ -440,6 +447,17 @@ class CVSettings:
 SINGLE_ANIMAL_TRACK_ID = 1
 
 
+def _identity_key(s: CVSettings) -> tuple:
+    """Every setting the identity assigner is built from, copied."""
+    return (
+        s.identity_mode,
+        [dict(a) for a in s.animals],
+        s.identity_separation_px,
+        s.identity_relabel_s,
+        s.identity_max_travel_px,
+    )
+
+
 def keep_most_confident(detections: list[Detection]) -> list[Detection]:
     """Reduce a frame's detections to the single most confident one.
 
@@ -628,6 +646,7 @@ class CVProcessor:
         self._device: str = "cpu"
         self._tracker: ObjectTracker | None = None
         self._identity: Any = None  # IdentityAssigner, built lazily when identity is on
+        self._identity_key: tuple | None = None  # settings the assigner was built from
         #: Per-animal live behaviour classifier (AnimalBehaviorClassifiers).
         self._animal_classifier: Any = None
         self._animal_behavior_callbacks: list[Callable[[Any], None]] = []
@@ -726,12 +745,15 @@ class CVProcessor:
     @property
     def identity_unavailable_reason(self) -> str | None:
         """Why identity cannot run, or None (off, or the backend supports it)."""
-        if self._settings.identity_mode == "off" or self._active_backend in (
-            DetectionBackend.YOLO_V8,
-            DetectionBackend.YOLO_BYTETRACK,
-        ):
+        if self._settings.identity_mode == "off":
             return None
-        return f"Identity needs a YOLO model; the active backend is {self._active_backend.name}."
+        return identity_unsupported_reason(self._active_backend)
+
+    @property
+    def class_names(self) -> list[str]:
+        """The loaded YOLO model's class names, in class-id order ([] if none)."""
+        names = getattr(self._yolo_model, "names", None) or {}
+        return [str(n) for n in (names.values() if isinstance(names, dict) else names)]
 
     @property
     def identity_active(self) -> bool:
@@ -761,6 +783,8 @@ class CVProcessor:
             from glider.vision.identity_live import IdentityAssigner
 
             s = self._settings
+            # A snapshot: the dialog may edit the live settings' animals in place.
+            self._identity_key = _identity_key(s)
             # ponytail: fps isn't plumbed into CVProcessor; assume 30.
             self._identity = IdentityAssigner(
                 [a["name"] for a in s.animals],
@@ -1551,9 +1575,8 @@ class CVProcessor:
         """
         old_backend = self._settings.backend
         old_model_path = self._settings.model_path
-        old_identity = (self._settings.identity_mode, self._settings.animals)
         self._settings = settings
-        if old_identity != (settings.identity_mode, settings.animals):
+        if self._identity_key != _identity_key(settings):
             self._identity = None
 
         # Reinitialize if the backend changed, or if the model path changed on
