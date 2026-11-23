@@ -162,6 +162,9 @@ def _resolve_device_for_yolo() -> str:
     return resolve_device(None)
 
 
+IDENTITY_MODES = ("off", "appearance", "continuity")
+
+
 class DetectionBackend(Enum):
     """Available detection backends."""
 
@@ -316,6 +319,14 @@ class CVSettings:
     vision_cone_fov: float = 120.0  # Total field of view in degrees
     vision_cone_color: tuple[int, int, int] = (0, 255, 255)  # BGR yellow
     vision_cone_alpha: float = 0.3  # Overlay transparency
+    # Live multi-animal identity. "off" keeps tracks anonymous, as before.
+    identity_mode: str = "off"
+    # Each {"name": str, "class_name": str | None}; class_name is the model
+    # class that marks this animal in "appearance" mode.
+    animals: list[dict[str, str | None]] = field(default_factory=list)
+    identity_separation_px: float = 60.0
+    identity_relabel_s: float = 0.5
+    identity_max_travel_px: float = 40.0
 
     def copy(self) -> "CVSettings":
         """Return an independent copy, safe to hand to a mutating consumer.
@@ -327,7 +338,11 @@ class CVSettings:
         must copy first, or the edit lands on the live object and
         ``update_settings`` can no longer tell what changed.
         """
-        return replace(self, keypoint_names=list(self.keypoint_names))
+        return replace(
+            self,
+            keypoint_names=list(self.keypoint_names),
+            animals=[dict(a) for a in self.animals],
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -357,6 +372,11 @@ class CVSettings:
             "vision_cone_fov": self.vision_cone_fov,
             "vision_cone_color": self.vision_cone_color,
             "vision_cone_alpha": self.vision_cone_alpha,
+            "identity_mode": self.identity_mode,
+            "animals": [dict(a) for a in self.animals],
+            "identity_separation_px": self.identity_separation_px,
+            "identity_relabel_s": self.identity_relabel_s,
+            "identity_max_travel_px": self.identity_max_travel_px,
         }
 
     @classmethod
@@ -395,6 +415,15 @@ class CVSettings:
             vision_cone_fov=data.get("vision_cone_fov", 120.0),
             vision_cone_color=tuple(data.get("vision_cone_color", [0, 255, 255])),
             vision_cone_alpha=data.get("vision_cone_alpha", 0.3),
+            identity_mode=(
+                data["identity_mode"]
+                if data.get("identity_mode") in IDENTITY_MODES
+                else "off"
+            ),
+            animals=[dict(a) for a in data.get("animals", [])],
+            identity_separation_px=data.get("identity_separation_px", 60.0),
+            identity_relabel_s=data.get("identity_relabel_s", 0.5),
+            identity_max_travel_px=data.get("identity_max_travel_px", 40.0),
         )
 
 
