@@ -107,15 +107,100 @@ def test_clicks_after_the_names_are_anonymous(qtbot):
     assert panel.naming_complete
 
 
-def test_a_name_that_found_no_animal_is_asked_again(qtbot):
-    panel = _live_panel(qtbot, _cv(dets=[_det(0)]))
+def test_a_click_on_empty_floor_asks_again(qtbot):
+    panel = _live_panel(qtbot, _cv())
+    _feed(panel)
+    _click(panel, 50, 80)  # nowhere near either animal
+    assert panel._naming_label.text() == "No animal there \u2014 click on Mouse A"
+    assert panel._placements == {}
+    _click(panel, 6, 14)  # inside Mouse A's box
+    assert panel._naming_label.text() == "Click Mouse B"
+
+
+def test_one_animal_cannot_take_two_names(qtbot):
+    panel = _live_panel(qtbot, _cv())
+    _feed(panel)
+    _click(panel, 5, 15)
+    _click(panel, 6, 16)  # Mouse A again
+    assert panel._naming_label.text() == "No animal there \u2014 click on Mouse B"
+
+
+def test_animals_that_cross_before_done_keep_their_clicked_names(qtbot):
+    """Each click binds when it is made and follows its animal frame by frame,
+    so the names do not swap when the animals trade places before Done."""
+
+    def at(ax, bx):
+        return [_det(ax, 10), _det(bx, 50)]  # Mouse A on the top row, B below
+
+    cv = _cv()
+    panel = _live_panel(qtbot, cv)
+    cv._detect_yolo.side_effect = lambda *_a: at(0, 100)
+    _feed(panel)
+    _click(panel, 5, 15)  # Mouse A
+    _click(panel, 105, 55)  # Mouse B
+    for step in range(1, 6):
+        cv._detect_yolo.side_effect = lambda *_a, s=step: at(20 * s, 100 - 20 * s)
+        _feed(panel)
+    panel._naming_done_btn.click()
+    assert panel.naming_complete
+    _, tracked, _ = cv.process_frame(_frame(), 1.0)
+    names = {t.animal: t.centroid for t in tracked}
+    assert names == {"Mouse A": (105, 15), "Mouse B": (5, 55)}
+
+
+def test_tentative_names_are_drawn_while_naming(qtbot):
+    panel = _live_panel(qtbot, _cv())
+    _feed(panel)
+    _click(panel, 5, 15)
+    assert panel._preview._naming_marks == [("Mouse A", (5, 15))]
+    _click(panel, 105, 15)
+    panel._naming_done_btn.click()
+    assert panel._preview._naming_marks == []
+
+
+def test_a_finished_run_names_the_animals_again(qtbot):
+    from types import SimpleNamespace
+
+    from glider.core.experiment_session import FlowConfig, NodeConfig
+    from glider.gui.runner.readiness import compute_readiness
+
+    cv = _cv()
+    panel = _live_panel(qtbot, cv)
     _feed(panel)
     _click(panel, 5, 15)
     _click(panel, 105, 15)
     panel._naming_done_btn.click()
-    assert not panel.naming_complete
-    assert panel._naming_label.text().endswith("Click Mouse B")
-    assert panel._naming_done_btn.isHidden()
+    panel.on_experiment_state("RUNNING")
+    panel.on_experiment_state("PAUSED")
+    assert cv.identity_ready  # a pause is the same trial
+    panel.on_experiment_state("RUNNING")
+    panel.on_experiment_state("STOPPING")
+    assert not cv.identity_ready
+    core = SimpleNamespace(
+        session=SimpleNamespace(
+            flow=FlowConfig(nodes=[NodeConfig(id="0", node_type="StartExperiment")]),
+            metadata=SimpleNamespace(name=""),
+        ),
+        hardware_manager=SimpleNamespace(
+            is_any_board_connected=lambda: True, connected_board_description=lambda: ""
+        ),
+        cv_processor=cv,
+    )
+    assert compute_readiness(core).identity_message == "Name the animals on the camera view"
+    _feed(panel)
+    assert panel._naming_label.text() == "Click Mouse A"
+
+
+def test_name_at_start_turns_computer_vision_on(qtbot):
+    panel = CameraPanel(CameraManager(), _cv())
+    qtbot.addWidget(panel)
+    assert panel._cv_enabled_cb.isChecked()
+
+
+def test_other_modes_leave_computer_vision_alone(qtbot):
+    panel = CameraPanel(CameraManager(), _cv(mode="appearance"))
+    qtbot.addWidget(panel)
+    assert not panel._cv_enabled_cb.isChecked()
 
 
 def test_appearance_mode_never_asks(qtbot):

@@ -89,7 +89,9 @@ class IdentityAssigner:
     ) -> list[str]:
         """Bind each named / anonymous click to its nearest detection.
 
-        Returns the names that could not be bound; on any, nothing is seeded.
+        A click farther than ``separation_px`` from its matched detection stays
+        unbound. Returns the names that could not be bound; on any, nothing is
+        seeded.
         """
         clicks = [placements.get(n) for n in self.names] + list(anonymous)
         rows = [i for i, c in enumerate(clicks) if c is not None]
@@ -99,7 +101,8 @@ class IdentityAssigner:
             there = np.array([clicks[i] for i in rows], dtype=float)
             cost = np.linalg.norm(there[:, None, :] - here[None, :, :], axis=2)
             for r, c in zip(*linear_sum_assignment(cost), strict=True):
-                bound[rows[r]] = detections[c]
+                if cost[r, c] <= self.separation_px:
+                    bound[rows[r]] = detections[c]
         unbound = [n for i, n in enumerate(self.names) if i not in bound]
         if unbound:
             self._slots = []

@@ -54,8 +54,11 @@ def _identity_message(core) -> str | None:
     cv = getattr(core, "cv_processor", None)
     settings = getattr(cv, "settings", None)
     mode = getattr(settings, "identity_mode", "off")
-    if mode not in ("appearance", "continuity") or getattr(settings, "enabled", False) is not True:
+    if mode not in ("appearance", "continuity"):
         return None
+    if getattr(settings, "enabled", False) is not True:
+        # Naming happens on the tracked camera view, so it needs CV running.
+        return "Turn on Computer Vision to name the animals" if mode == "continuity" else None
     reason = cv.identity_unavailable_reason
     if reason:
         return reason

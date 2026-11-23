@@ -234,3 +234,10 @@ def test_appearance_first_frame_matches_by_class():
     a = IdentityAssigner(["Dam", "Pup"], mode="appearance", class_names=["dam", "pup"])
     out = a.update([det(100, 100, "pup"), det(300, 100, "dam")])
     assert rows(out) == [("Dam", 0, True, "", (300, 100)), ("Pup", 1, True, "", (100, 100))]
+
+
+def test_seed_refuses_a_click_far_from_every_animal():
+    a = IdentityAssigner(["A", "B"], mode="continuity", separation_px=60)
+    # B's click is 150 px from the only free animal: unbound, not snapped to it.
+    assert a.seed([det(100, 100), det(400, 100)], {"A": (100, 100), "B": (250, 100)}) == ["B"]
+    assert not a.ready

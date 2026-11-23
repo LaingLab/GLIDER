@@ -158,3 +158,11 @@ def test_overlay_names_each_animal_and_dims_a_hidden_one():
     # The hidden animal is drawn, but never in the live overlay colour.
     assert (out[10:52, 108:152] == color).all(axis=2).sum() == 0
     assert (out[10:52, 8:52] == color).all(axis=2).sum() > 0
+
+
+def test_clear_identity_drops_only_the_seed():
+    proc = _seeded()
+    proc._trail_history[7] = [(1, 1)]
+    proc.clear_identity()
+    assert not proc.identity_ready
+    assert proc._trail_history[7] == [(1, 1)]

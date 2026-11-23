@@ -796,6 +796,14 @@ class CVProcessor:
             )
         return self._identity
 
+    def clear_identity(self) -> None:
+        """Forget who is who (the next trial names its animals afresh).
+
+        Only the identity assigner; trails, ByteTrack and zones are untouched.
+        """
+        with self._lock:
+            self._identity = None
+
     def seed_identity(
         self,
         placements: dict[str, tuple[float, float]],

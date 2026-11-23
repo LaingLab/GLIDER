@@ -7,6 +7,7 @@ and quick access to camera settings.
 
 import asyncio
 import logging
+import math
 import time
 from collections import deque
 from dataclasses import dataclass, replace
@@ -154,6 +155,8 @@ class CameraPreviewWidget(QLabel):
         self._behavior_label = ""
         self._vocab: list[str] | None = None
         self._frame_size: tuple[int, int] | None = None  # (w, h) of the last frame shown
+        # Names placed while naming the animals: [(name, (x, y))] in frame pixels.
+        self._naming_marks: list[tuple[str, tuple[int, int]]] = []
         self.setText("No Camera")
         # Prevent the widget from resizing based on pixmap content
         self.setScaledContents(False)
@@ -196,6 +199,10 @@ class CameraPreviewWidget(QLabel):
         The panel calls this once at Start. Main-thread only.
         """
         self._vocab = vocab
+
+    def set_naming_marks(self, marks: list[tuple[str, tuple[int, int]]]) -> None:
+        """Names placed so far while naming the animals (empty clears them)."""
+        self._naming_marks = marks
 
     def _draw_overlays(self, frame: np.ndarray) -> np.ndarray:
         """Draw the pose skeleton + behavior badge onto ``frame`` in place.
@@ -246,6 +253,21 @@ class CameraPreviewWidget(QLabel):
             if display_frame is frame:
                 display_frame = frame.copy()
             display_frame = self._draw_overlays(display_frame)
+
+        if self._naming_marks:
+            if display_frame is frame:
+                display_frame = frame.copy()
+            for name, (x, y) in self._naming_marks:
+                cv2.circle(display_frame, (int(x), int(y)), 6, (0, 255, 255), -1)
+                cv2.putText(
+                    display_frame,
+                    name,
+                    (int(x) + 8, int(y) - 8),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.6,
+                    (0, 255, 255),
+                    2,
+                )
 
         # Convert BGR to RGB
         rgb_frame = cv2.cvtColor(display_frame, cv2.COLOR_BGR2RGB)
@@ -384,6 +406,8 @@ class CameraPanel(QWidget):
         self._naming = False
         self._placements: dict[str, tuple[float, float]] = {}
         self._anonymous: list[tuple[float, float]] = []
+        self._naming_dets: list = []  # the last processed frame's detections
+        self._run_live = False  # a run is RUNNING/PAUSED (one trial)
         self._pending_rehearsal: str | None = None  # played once naming is done
 
         # Video-file source state (offline tracking)
@@ -709,6 +733,7 @@ class CameraPanel(QWidget):
 
         # Initial camera list
         self._refresh_cameras()
+        self.sync_identity_settings()
 
     def _connect_signals(self) -> None:
         """Connect camera callbacks and thread-safe signals."""
@@ -820,6 +845,8 @@ class CameraPanel(QWidget):
                 return
             if self._overlay_cb.isChecked():
                 frame = self._cv_processor.draw_overlays(frame, dets, tracked, motion)
+            self._naming_dets = dets
+            self._last_frame = frame
             self._preview.update_frame(frame)
             self._pending_rehearsal = path
             self.begin_naming()
@@ -837,13 +864,24 @@ class CameraPanel(QWidget):
             and cv.settings.identity_mode == "continuity"
         )
 
+    def sync_identity_settings(self) -> None:
+        """Follow newly applied/loaded CV settings.
+
+        "Name at start" happens on the tracked view, so it turns Computer
+        Vision on; the box is hidden on the Run page, where naming is done.
+        """
+        if self._cv_processor.settings.identity_mode == "continuity":
+            self._cv_enabled_cb.setChecked(True)
+        self._update_live_controls_enabled()
+
     @property
     def naming_complete(self) -> bool:
         """Every configured animal is placed (or naming does not apply)."""
         return not self._naming and (not self._naming_needed() or self._cv_processor.identity_ready)
 
-    def _animal_names(self) -> list[str]:
-        return [a["name"] for a in self._cv_processor.settings.animals]
+    def _unplaced(self) -> list[str]:
+        names = [a["name"] for a in self._cv_processor.settings.animals]
+        return [n for n in names if n not in self._placements]
 
     def begin_naming(self) -> None:
         """Ask the operator to click each animal on the camera view."""
@@ -854,34 +892,80 @@ class CameraPanel(QWidget):
         self._anonymous = []
         self._update_naming()
 
-    def _update_naming(self, prefix: str = "") -> None:
-        unplaced = [n for n in self._animal_names() if n not in self._placements]
+    def _update_naming(self, message: str = "") -> None:
+        unplaced = self._unplaced()
         self._naming_label.setText(
-            prefix + (f"Click {unplaced[0]}" if unplaced else "Click any other animals, then Done")
+            message
+            or (f"Click {unplaced[0]}" if unplaced else "Click any other animals, then Done")
         )
         self._naming_done_btn.setVisible(not unplaced)
         self._naming_bar.setVisible(self._naming)
+        marks = list(self._placements.items()) + [("?", p) for p in self._anonymous]
+        self._preview.set_naming_marks(marks if self._naming else [])
+        if self._last_frame is not None:
+            self._preview.update_frame(self._last_frame)  # show the marks now
         self.naming_changed.emit()
 
     def _on_preview_clicked(self, x: int, y: int) -> None:
+        """Bind the click to the animal under it, now, or ask again."""
         if not self._naming:
             return
         point = self._preview.to_frame(x, y)
         if point is None:
             return
-        unplaced = [n for n in self._animal_names() if n not in self._placements]
+        taken = set(self._placements.values()) | set(self._anonymous)
+        free = [d for d in self._naming_dets if d.centroid not in taken]
+        hit = min(free, key=lambda d: math.dist(point, d.centroid), default=None)
+        reach = self._cv_processor.settings.identity_separation_px
+        if hit is not None:
+            bx, by, bw, bh = hit.bbox
+            inside = bx <= point[0] <= bx + bw and by <= point[1] <= by + bh
+            if not (inside or math.dist(point, hit.centroid) <= reach):
+                hit = None
+        unplaced = self._unplaced()
+        if hit is None:
+            who = unplaced[0] if unplaced else "another animal, or press Done"
+            self._update_naming(f"No animal there \u2014 click on {who}")
+            return
         if unplaced:
-            self._placements[unplaced[0]] = point
+            self._placements[unplaced[0]] = hit.centroid
         else:
-            self._anonymous.append(point)
+            self._anonymous.append(hit.centroid)
         self._update_naming()
+
+    def _follow_placements(self, detections: list) -> None:
+        """Keep each placed name on its animal as it moves before Done."""
+        reach = self._cv_processor.settings.identity_max_travel_px
+        placed = list(self._placements.items()) + [(None, p) for p in self._anonymous]
+        # ponytail: greedy nearest-first, not an optimal assignment; fine for
+        # the few animals and small per-frame steps of a naming pause.
+        pairs = sorted(
+            (math.dist(p, d.centroid), i, j)
+            for i, (_, p) in enumerate(placed)
+            for j, d in enumerate(detections)
+            if math.dist(p, d.centroid) <= reach
+        )
+        moved = [p for _, p in placed]
+        used_i: set[int] = set()
+        used_j: set[int] = set()
+        for _, i, j in pairs:
+            if i not in used_i and j not in used_j:
+                used_i.add(i)
+                used_j.add(j)
+                moved[i] = detections[j].centroid
+        self._placements = {n: moved[i] for i, (n, _) in enumerate(placed) if n is not None}
+        self._anonymous = [moved[i] for i, (n, _) in enumerate(placed) if n is None]
+        self._preview.set_naming_marks(
+            list(self._placements.items()) + [("?", p) for p in self._anonymous]
+        )
 
     def _finish_naming(self) -> None:
         unbound = self._cv_processor.seed_identity(self._placements, self._anonymous)
         if unbound:
+            # Lost from view since it was clicked: place it again.
             for name in unbound:
                 self._placements.pop(name, None)
-            self._update_naming("No animal there. ")
+            self._update_naming(f"No animal there \u2014 click on {self._unplaced()[0]}")
             return
         self._naming = False
         self._update_naming()
@@ -930,6 +1014,12 @@ class CameraPanel(QWidget):
         """
         if state_name in ("READY", "IDLE", "ERROR") and self._rehearsal_pump is not None:
             self.stop_rehearsal()
+        # A new trial may have different animals in the same places: once the
+        # run ends, forget the names so the next Start asks again.
+        live = state_name in ("RUNNING", "PAUSED")
+        if self._run_live and not live:
+            self._cv_processor.clear_identity()
+        self._run_live = live
 
     def stop_rehearsal(self) -> None:
         pump = self._rehearsal_pump
@@ -1182,6 +1272,9 @@ class CameraPanel(QWidget):
             logger.debug("Skipping main-thread CV processing (should use CVWorker)")
 
         if detections is not None:
+            self._naming_dets = detections
+            if self._naming:
+                self._follow_placements(detections)
             if self._overlay_cb.isChecked():
                 display_frame = self._cv_processor.draw_overlays(frame, detections, tracked, motion)
                 annotated_frame = display_frame

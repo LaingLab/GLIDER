@@ -50,8 +50,14 @@ def test_appearance_mode_never_blocks_start():
     assert r.identity_message is None
 
 
-@pytest.mark.parametrize("core", [_core("off"), _core(enabled=False)])
+@pytest.mark.parametrize("core", [_core("off"), _core("appearance", enabled=False)])
 def test_identity_off_or_cv_off_changes_nothing(core):
     r = compute_readiness(core)
     assert r.experiment_ready is True
     assert r.identity_message is None
+
+
+def test_name_at_start_with_computer_vision_off_says_turn_it_on():
+    r = compute_readiness(_core(enabled=False))
+    assert r.experiment_ready is False
+    assert r.identity_message == "Turn on Computer Vision to name the animals"

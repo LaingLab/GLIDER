@@ -1722,6 +1722,7 @@ class MainWindow(QMainWindow):
         )
         camera_panel.rehearsal_ended.connect(lambda: self._run_async(self._end_rehearsal_async()))
         self.state_changed.connect(camera_panel.on_experiment_state)
+        self.session_changed.connect(camera_panel.sync_identity_settings)
         camera_panel.set_video_recorder(self._core.video_recorder)
         camera_panel.set_multi_video_recorder(self._core.multi_video_recorder)
         camera_panel.set_tracking_logger(self._core.tracking_logger)
@@ -3790,8 +3791,7 @@ class MainWindow(QMainWindow):
             try:
                 self._core.cv_processor.update_settings(cv_settings)
                 if self._camera_panel is not None:
-                    # Identity changes what Live Behavior needs before Start.
-                    self._camera_panel._update_live_controls_enabled()
+                    self._camera_panel.sync_identity_settings()
             except Exception as exc:
                 # A pose model that will not load raises its own error, and
                 # GLIDER installs no excepthook: escaping this slot aborted the
