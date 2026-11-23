@@ -368,6 +368,9 @@ class CameraPanel(QWidget):
         self._cv_worker = CVWorker(self._cv_processor)
         self._cv_worker.moveToThread(self._cv_thread)
         self._cv_thread.start()
+        # Per-animal behaviour (identity on) is classified inside the CV
+        # worker; its events go straight to the bus from that thread.
+        self._cv_processor.on_animal_behavior(self._publish_event)
 
         # Models and videos can be dragged straight onto the panel; the drop is
         # routed by type (see gui/panels/model_drop.py).
@@ -919,7 +922,7 @@ class CameraPanel(QWidget):
         # corrupts the stateful features. (A future bounded/gap-aware path is
         # out of scope.) The CV path below is bounded instead; it is not
         # stateful in the same way.
-        if self._behavior_running:
+        if self._behavior_running and self._behavior_worker is not None:
             self._behavior_frame_requested.emit(frame_data)
 
         if self._cv_enabled_cb.isChecked() and self._cv_processor.is_initialized:
@@ -1937,6 +1940,9 @@ class CameraPanel(QWidget):
         names = self._parse_keypoint_names()
         if self._behavior_pkl is None or self._pose_model_path is None or not names:
             return
+        if self._cv_processor.identity_active:
+            self._start_animal_behavior()
+            return
 
         from glider.gui.panels.live_behavior import BehaviorInferenceWorker
 
@@ -1960,19 +1966,45 @@ class CameraPanel(QWidget):
             str(self._behavior_pkl), str(self._pose_model_path), names
         )
 
+    def _start_animal_behavior(self) -> None:
+        """Identity on: classify each named animal inside the CV worker.
+
+        The identity tracker already decodes every named animal's keypoints, so
+        there is no separate pose net and no frame fan-out worker here.
+        """
+        from PyQt6.QtWidgets import QMessageBox
+
+        from glider.analysis.behavior.classify.pipeline import _load_behavior_model
+        from glider.gui.panels.live_behavior import AnimalBehaviorClassifiers
+
+        settings = self._cv_processor.settings
+        try:
+            model = _load_behavior_model(str(self._behavior_pkl))
+            classifiers = AnimalBehaviorClassifiers(
+                model, settings.keypoint_names, [a["name"] for a in settings.animals]
+            )
+        except Exception as exc:  # noqa: BLE001 - report every failure to the UI
+            QMessageBox.warning(self, "Live Behavior", str(exc))
+            return
+        self._cv_processor.set_animal_classifiers(classifiers)
+        self._go_live(list(model.classes))
+
     def _on_behavior_ready(self) -> None:
         """Models loaded successfully — go live."""
         worker = self._behavior_worker
         if worker is None:
             return
-        self._preview.set_behavior_vocab(worker.classes)
+        self._go_live(worker.classes)
+
+    def _go_live(self, classes: list[str]) -> None:
+        self._preview.set_behavior_vocab(classes)
         self._update_rehearse_label()
         self._show_rehearse_status("Ready to rehearse from a recording.")
         # Also hand the vocabulary to the flow side, so a Behavior Input node's
         # properties can offer the behaviors this model actually emits instead
         # of a free-text box where a typo means "never fires".
         if self._live_signals is not None:
-            self._live_signals.set_behaviors(worker.classes)
+            self._live_signals.set_behaviors(classes)
         self._behavior_running = True
         self._live_behavior_btn.setText("Stop")
         self._live_behavior_btn.setEnabled(True)
@@ -2000,20 +2032,25 @@ class CameraPanel(QWidget):
 
     def _publish_behavior(self, label: str, keypoints: Any) -> None:
         """Hand one classification to the live signal bus, if one is attached."""
+        from glider.core.live_signals import BehaviorEvent
+
+        self._publish_event(
+            BehaviorEvent(
+                behavior=label,
+                frame_index=self._frame_count,
+                timestamp=time.time(),
+                keypoints=keypoints,
+            )
+        )
+
+    def _publish_event(self, event: Any) -> None:
+        """Publish one BehaviorEvent; also called from the CV worker thread
+        for per-animal events (the bus is thread-safe)."""
         bus = self._live_signals
         if bus is None:
             return
-        from glider.core.live_signals import BehaviorEvent
-
         try:
-            bus.publish_behavior(
-                BehaviorEvent(
-                    behavior=label,
-                    frame_index=self._frame_count,
-                    timestamp=time.time(),
-                    keypoints=keypoints,
-                )
-            )
+            bus.publish_behavior(event)
         except Exception:
             # A failing subscriber must not take the preview down with it; the
             # bus already logs per-subscriber failures.
@@ -2026,6 +2063,7 @@ class CameraPanel(QWidget):
         Stop toggle and panel teardown so no worker thread outlives the panel.
         """
         self._behavior_running = False
+        self._cv_processor.set_animal_classifiers(None)
         self._teardown_behavior_thread()
         self._preview.set_pose_overlay(None)
         self._preview.set_behavior_label("")

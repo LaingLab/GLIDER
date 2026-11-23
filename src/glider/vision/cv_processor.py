@@ -625,8 +625,9 @@ class CVProcessor:
         self._device: str = "cpu"
         self._tracker: ObjectTracker | None = None
         self._identity: Any = None  # IdentityAssigner, built lazily when identity is on
-        #: Set by Task 6: a per-animal classifier that needs every frame.
+        #: Per-animal live behaviour classifier (AnimalBehaviorClassifiers).
         self._animal_classifier: Any = None
+        self._animal_behavior_callbacks: list[Callable[[Any], None]] = []
         self._initialized = False
         self._lock = threading.Lock()
 
@@ -740,6 +741,17 @@ class CVProcessor:
     @property
     def needs_every_frame(self) -> bool:
         return self.identity_active and self._animal_classifier is not None
+
+    def set_animal_classifiers(self, obj: Any) -> None:
+        """Attach (or with None, detach) per-animal live behaviour classifiers."""
+        self._animal_classifier = obj
+
+    def on_animal_behavior(self, callback: Callable[[Any], None]) -> None:
+        """Register a callback for each per-animal ``BehaviorEvent``.
+
+        Fired from :meth:`process_frame`, i.e. on the CVWorker thread.
+        """
+        self._animal_behavior_callbacks.append(callback)
 
     def _get_identity(self):
         if self._identity is None:
@@ -1047,6 +1059,20 @@ class CVProcessor:
             self._last_detections = detections
             self._last_tracked = tracked
             self._last_motion = motion
+            classifier = self._animal_classifier if identity else None
+
+        if classifier is not None:
+            try:
+                events = classifier.push(tracked, timestamp, self._frame_counter)
+            except Exception:
+                logger.exception("Per-animal behaviour classification failed")
+                events = []
+            for event in events:
+                for cb in self._animal_behavior_callbacks:
+                    try:
+                        cb(event)
+                    except Exception as e:
+                        logger.error(f"Animal behavior callback error: {e}")
 
         # Notify zone callbacks
         if zone_states:
