@@ -419,9 +419,7 @@ class CVSettings:
             vision_cone_color=tuple(data.get("vision_cone_color", [0, 255, 255])),
             vision_cone_alpha=data.get("vision_cone_alpha", 0.3),
             identity_mode=(
-                data["identity_mode"]
-                if data.get("identity_mode") in IDENTITY_MODES
-                else "off"
+                data["identity_mode"] if data.get("identity_mode") in IDENTITY_MODES else "off"
             ),
             animals=[dict(a) for a in data.get("animals", [])],
             identity_separation_px=data.get("identity_separation_px", 60.0),
@@ -626,6 +624,9 @@ class CVProcessor:
         # stays "cpu" until then and if no GPU is present.
         self._device: str = "cpu"
         self._tracker: ObjectTracker | None = None
+        self._identity: Any = None  # IdentityAssigner, built lazily when identity is on
+        #: Set by Task 6: a per-animal classifier that needs every frame.
+        self._animal_classifier: Any = None
         self._initialized = False
         self._lock = threading.Lock()
 
@@ -717,6 +718,53 @@ class CVProcessor:
     def is_initialized(self) -> bool:
         """Whether CV processor is initialized."""
         return self._initialized
+
+    @property
+    def identity_unavailable_reason(self) -> str | None:
+        """Why identity cannot run, or None (off, or the backend supports it)."""
+        if self._settings.identity_mode == "off" or self._active_backend in (
+            DetectionBackend.YOLO_V8,
+            DetectionBackend.YOLO_BYTETRACK,
+        ):
+            return None
+        return f"Identity needs a YOLO model; the active backend is {self._active_backend.name}."
+
+    @property
+    def identity_active(self) -> bool:
+        return self._settings.identity_mode != "off" and self.identity_unavailable_reason is None
+
+    @property
+    def identity_ready(self) -> bool:
+        return self._identity is not None and self._identity.ready
+
+    @property
+    def needs_every_frame(self) -> bool:
+        return self.identity_active and self._animal_classifier is not None
+
+    def _get_identity(self):
+        if self._identity is None:
+            from glider.vision.identity_live import IdentityAssigner
+
+            s = self._settings
+            # ponytail: fps isn't plumbed into CVProcessor; assume 30.
+            self._identity = IdentityAssigner(
+                [a["name"] for a in s.animals],
+                mode=s.identity_mode,
+                class_names=[a.get("class_name") for a in s.animals],
+                max_travel_px=s.identity_max_travel_px,
+                separation_px=s.identity_separation_px,
+                relabel_frames=round(s.identity_relabel_s * 30),
+            )
+        return self._identity
+
+    def seed_identity(
+        self,
+        placements: dict[str, tuple[float, float]],
+        anonymous: list[tuple[float, float]],
+    ) -> list[str]:
+        """Bind clicks to the last frame's detections; returns unbound names."""
+        with self._lock:
+            return self._get_identity().seed(self._last_detections, placements, anonymous)
 
     def set_zone_configuration(self, config: "ZoneConfiguration") -> None:
         """
@@ -944,10 +992,11 @@ class CVProcessor:
         if not self._initialized:
             self.initialize()
 
-        # Frame skipping for performance
+        # Frame skipping for performance (identity needs every frame)
+        identity = self.identity_active
         self._frame_counter += 1
         skip_n = self._settings.process_every_n_frames
-        if skip_n > 1 and (self._frame_counter % skip_n) != 1:
+        if not identity and skip_n > 1 and (self._frame_counter % skip_n) != 1:
             # Return cached results (but don't fire callbacks for skipped frames)
             self.last_result_cached = True
             return self._last_detections, self._last_tracked, self._last_motion
@@ -963,15 +1012,18 @@ class CVProcessor:
                 fg_mask = self._bg_subtractor.apply(frame)
 
             # Run detection
-            detections = self._detect(frame, fg_mask)
-            if self._settings.single_animal:
+            # Identity does its own tracking: plain YOLO detections, no ByteTrack.
+            detections = self._detect_yolo(frame) if identity else self._detect(frame, fg_mask)
+            if self._settings.single_animal and not identity:
                 detections = self._keep_single_animal(detections)
 
             # Run tracking
             tracked = []
             if self._settings.tracking_enabled:
+                if identity:
+                    tracked = self._get_identity().update(detections)
                 # ByteTrack provides its own tracking - convert detections to TrackedObjects
-                if self._active_backend == DetectionBackend.YOLO_BYTETRACK:
+                elif self._active_backend == DetectionBackend.YOLO_BYTETRACK:
                     tracked = self._bytetrack_to_tracked(detections)
                 elif self._tracker:
                     # Use centroid tracker for other backends
@@ -1470,7 +1522,10 @@ class CVProcessor:
         """
         old_backend = self._settings.backend
         old_model_path = self._settings.model_path
+        old_identity = (self._settings.identity_mode, self._settings.animals)
         self._settings = settings
+        if old_identity != (settings.identity_mode, settings.animals):
+            self._identity = None
 
         # Reinitialize if the backend changed, or if the model path changed on
         # a model-backed backend. Previously only a backend change triggered a
@@ -1498,6 +1553,7 @@ class CVProcessor:
             self._tracker.reset()
         self._trail_history.clear()
         self._bytetrack_ages.clear()
+        self._identity = None
         # model.track(persist=True) keeps its ByteTrack state (IDs, Kalman
         # filters) on the predictor; without this it carries across trials.
         predictor = getattr(self._yolo_model, "predictor", None)

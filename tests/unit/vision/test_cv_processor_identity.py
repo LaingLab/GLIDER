@@ -1,0 +1,98 @@
+"""CVProcessor routes live tracking through the identity assigner."""
+
+from __future__ import annotations
+
+from unittest.mock import MagicMock
+
+import numpy as np
+
+from glider.vision.cv_processor import CVProcessor, CVSettings, Detection, DetectionBackend
+from glider.vision.zones import ZoneTracker
+
+
+def _det(x: int, y: int = 10) -> Detection:
+    return Detection(class_id=0, class_name="mouse", confidence=0.9, bbox=(x, y, 10, 10))
+
+
+def _frame() -> np.ndarray:
+    return np.zeros((100, 200, 3), dtype=np.uint8)
+
+
+def _proc(mode="appearance", backend=DetectionBackend.YOLO_BYTETRACK, dets=None, **kw):
+    s = CVSettings(
+        backend=backend,
+        identity_mode=mode,
+        animals=[{"name": "A", "class_name": None}, {"name": "B", "class_name": None}],
+        **kw,
+    )
+    proc = CVProcessor(s)
+    proc._initialized = True
+    proc._active_backend = backend
+    proc._detect_yolo = MagicMock(side_effect=lambda *_a, **_k: list(dets or [_det(0), _det(100)]))
+    proc._detect = MagicMock(side_effect=AssertionError("ByteTrack path must not run"))
+    return proc
+
+
+def test_identity_names_animals_with_stable_ids():
+    proc = _proc()
+    _, tracked, _ = proc.process_frame(_frame(), 0.0)
+    assert sorted((t.animal, t.track_id) for t in tracked) == [("A", 0), ("B", 1)]
+
+
+def test_frame_skipping_is_ignored_while_identity_is_active():
+    proc = _proc(process_every_n_frames=3)
+    for i in range(4):
+        proc.process_frame(_frame(), float(i))
+        assert proc.last_result_cached is False
+    assert proc._detect_yolo.call_count == 4
+
+
+def test_continuity_before_seed_gives_unnamed_extras():
+    proc = _proc(mode="continuity")
+    _, tracked, _ = proc.process_frame(_frame(), 0.0)
+    assert proc.identity_ready is False
+    assert tracked and all(t.animal is None for t in tracked)
+    assert proc.seed_identity({"A": (5, 15), "B": (105, 15)}, []) == []
+    assert proc.identity_ready is True
+    _, tracked, _ = proc.process_frame(_frame(), 1.0)
+    assert sorted(t.animal for t in tracked) == ["A", "B"]
+
+
+def test_pose_backend_reports_why_and_falls_back():
+    proc = _proc(backend=DetectionBackend.POSE_MODEL)
+    assert "YOLO" in proc.identity_unavailable_reason
+    assert not proc.identity_active
+    proc._detect = MagicMock(return_value=[_det(0)])
+    _, tracked, _ = proc.process_frame(_frame(), 0.0)
+    proc._detect.assert_called_once()
+    assert all(t.animal is None for t in tracked)
+
+
+def test_off_has_no_reason_and_needs_no_every_frame():
+    proc = _proc(mode="off")
+    assert proc.identity_unavailable_reason is None
+    assert not proc.identity_active
+    assert not proc.needs_every_frame
+
+
+def test_changing_animals_or_mode_resets_the_assigner():
+    proc = _proc(mode="continuity")
+    proc.process_frame(_frame(), 0.0)
+    proc.seed_identity({"A": (5, 15), "B": (105, 15)}, [])
+    assert proc.identity_ready
+    s = proc.settings.copy()
+    s.animals = [{"name": "A", "class_name": None}]
+    proc.update_settings(s)
+    assert not proc.identity_ready
+
+
+def test_zone_tracker_receives_the_hidden_animal_at_its_frozen_spot():
+    proc = _proc()
+    proc._zone_tracker = MagicMock(spec=ZoneTracker)
+    proc._zone_tracker.update.return_value = {}
+    proc.process_frame(_frame(), 0.0)
+    proc._detect_yolo.side_effect = lambda *_a, **_k: [_det(0)]
+    proc.process_frame(_frame(), 1.0)
+    tracked = proc._zone_tracker.update.call_args.args[0]
+    hidden = [t for t in tracked if not t.visible]
+    assert len(hidden) == 1 and hidden[0].centroid == (105, 15)
