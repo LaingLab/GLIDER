@@ -74,9 +74,27 @@ def test_huddle_then_separate():
 def test_target_hidden_never_jumps():
     a = IdentityAssigner(["A"], mode="continuity")
     a.seed([det(100, 100), det(400, 100)], {"A": (100, 100)})
-    out = a.update([det(400, 100)])
-    assert by_name(out)["A"].visible is False and by_name(out)["A"].centroid == (100, 100)
-    assert rows(out) == [("A", 0, False, "gap", (100, 100)), (None, 1, True, "", (400, 100))]
+    for _ in range(60):  # the reach grows, but (400,100) was already there
+        out = a.update([det(400, 100)])
+        assert rows(out) == [("A", 0, False, "gap", (100, 100)), (None, 1, True, "", (400, 100))]
+
+
+def test_hidden_reacquires_newly_appeared_detection_in_grown_reach():
+    a = IdentityAssigner(["A"], mode="continuity")
+    a.seed([det(100, 100)], {"A": (100, 100)})
+    for _ in range(10):
+        a.update([])
+    # 250 px away, reach is 40 * 11 = 440, and nothing was near it last frame
+    assert rows(a.update([det(350, 100)])) == [("A", 0, True, "stitched", (350, 100))]
+
+
+def test_hidden_never_takes_animal_walking_up_from_afar():
+    a = IdentityAssigner(["A"], mode="continuity")
+    a.seed([det(100, 100), det(500, 100)], {"A": (100, 100)})
+    # walks 25 px/frame from 500 to 145 (just beyond the one-frame reach), then waits
+    for x in [*range(500, 144, -25), 145, 145, 145]:
+        out = a.update([det(x, 100)])
+        assert rows(out) == [("A", 0, False, "gap", (100, 100)), (None, 1, True, "", (x, 100))]
 
 
 def test_reacquire_within_reach_is_stitched():
@@ -95,7 +113,8 @@ def test_travel_limit_grows_with_frames_hidden():
     a.update([])  # hidden 1 frame
     out = a.update([det(200, 100)])  # 100 px > 40 * 2
     assert rows(out) == [("A", 0, False, "gap", (100, 100)), (None, 1, True, "", (200, 100))]
-    out = a.update([det(200, 100)])  # 100 px <= 40 * 3
+    a.update([])
+    out = a.update([det(200, 100)])  # 100 px <= 40 * 4, newly appeared
     assert rows(out) == [("A", 0, True, "stitched", (200, 100))]
 
 

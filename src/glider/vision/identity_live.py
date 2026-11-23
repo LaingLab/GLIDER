@@ -4,7 +4,10 @@ Pure numpy, Qt-free. One slot per named animal (plus, in continuity mode, one
 per clicked-but-unnamed animal). Each frame the slots are matched to the
 frame's detections with ``linear_sum_assignment``; a match beyond the travel
 limit (``max_travel_px`` per frame since the slot was last observed) is
-refused, so a hidden animal's name never jumps to another animal.
+refused. Beyond the one-frame reach (``max_travel_px``), a hidden slot may
+only take a detection that newly appeared this frame (none in the previous
+frame within ``max_travel_px``), so a hidden animal's name never jumps to an
+animal that was already in view.
 """
 
 from __future__ import annotations
@@ -68,6 +71,7 @@ class IdentityAssigner:
         self.reset()
 
     def reset(self) -> None:
+        self._prev: list[tuple[int, int]] = []  # last frame's detection centroids
         if self.mode == "appearance":
             self._slots = [_Slot(n, c) for n, c in zip(self.names, self.class_names, strict=True)]
         else:
@@ -103,6 +107,7 @@ class IdentityAssigner:
         # Unbound anonymous clicks (more clicks than detections) are dropped.
         n = len(self.names)
         self._slots = []
+        self._prev = []
         for i in sorted(bound):
             slot = _Slot(self.names[i] if i < n else None)
             self._observe(slot, bound[i], moved=False)
@@ -114,6 +119,9 @@ class IdentityAssigner:
         if not self.ready:
             return [self._extra(d, n + j) for j, d in enumerate(detections)]
 
+        reach = self.max_travel_px
+        new = [all(math.dist(d.centroid, p) > reach for p in self._prev) for d in detections]
+        self._prev = [d.centroid for d in detections]
         slots = self._slots
         raw = np.array([[self._cost(s, d) for d in detections] for s in slots]).reshape(
             len(slots), len(detections)
@@ -123,10 +131,11 @@ class IdentityAssigner:
             if s.pos is None:
                 cost[i] += _HIDDEN_COST
                 continue
-            limit = self.max_travel_px * (s.hidden + 1)
+            limit = reach * (s.hidden + 1)
             pred = self._predict(s)
             for j, d in enumerate(detections):
-                if math.dist(d.centroid, pred) > limit:
+                far = math.dist(d.centroid, pred)
+                if far > limit or (far > reach and not new[j]):
                     cost[i, j] = _BLOCKED
             if s.hidden:
                 cost[i] += _HIDDEN_COST
