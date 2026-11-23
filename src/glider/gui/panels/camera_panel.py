@@ -350,6 +350,9 @@ class CameraPanel(QWidget):
         self._cv_in_flight = False
         self._cv_queue: deque[FrameData] = deque()
         self._cv_lagging = False
+        # Timestamps of frames evicted while one is in flight; logged right
+        # after that frame so the log stays in capture order.
+        self._cv_dropped_ts: list[float] = []
         self._cv_frames_dropped = 0
 
         # --- Live behavior inference state ---
@@ -1131,9 +1134,8 @@ class CameraPanel(QWidget):
                 "CV processing is slower than the camera; %d frames dropped",
                 self._cv_frames_dropped,
             )
-        if self._tracking_logger is not None and self._tracking_logger.is_recording:
-            self._tracking_logger.log_frame(frame_data.timestamp, [])
-            self._dispatch_frame_tick(self._tracking_logger.frame_count, frame_data.timestamp)
+        if self._cv_processor.needs_every_frame:
+            self._cv_dropped_ts.append(frame_data.timestamp)
 
     def _update_cv_lag(self) -> None:
         """Emit cv_lag_changed when over a second of frames (by fps) is queued."""
@@ -1155,6 +1157,12 @@ class CameraPanel(QWidget):
             self._process_multi_frame_on_main_thread(frame_data, detections, tracked, motion)
         else:
             self._process_frame_on_main_thread(frame_data, detections, tracked, motion)
+        # Evicted frames follow the one just logged in capture order.
+        dropped, self._cv_dropped_ts = self._cv_dropped_ts, []
+        if self._tracking_logger is not None and self._tracking_logger.is_recording:
+            for ts in dropped:
+                self._tracking_logger.log_frame(ts, [])
+                self._dispatch_frame_tick(self._tracking_logger.frame_count, ts)
 
     def _draw_calibration_lines(self, frame: np.ndarray) -> np.ndarray:
         """Draw the arena outline on a frame for video recording."""

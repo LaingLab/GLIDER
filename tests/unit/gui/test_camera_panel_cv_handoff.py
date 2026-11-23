@@ -82,20 +82,39 @@ def test_every_frame_mode_queues_all_in_order(panel, monkeypatch):
     assert panel._sent == [float(t) for t in range(10)]
 
 
-def test_cap_drops_oldest_and_logs_it_empty(panel, monkeypatch):
+def _recording_logger(panel):
+    lg = MagicMock()
+    lg.is_recording = True
+    logged: list[float] = []
+    lg.log_frame.side_effect = lambda ts, *a, **k: logged.append(ts)
+    panel._tracking_logger = lg
+    panel._dispatch_frame_tick = MagicMock()
+    panel._process_frame_on_main_thread = lambda fd, d, t, m: lg.log_frame(fd.timestamp, [])
+    return logged
+
+
+def test_cap_drops_oldest_and_logs_in_capture_order(panel, monkeypatch):
     import glider.gui.panels.camera_panel as cp
 
     monkeypatch.setattr(cp, "CV_QUEUE_CAP", 2)
     monkeypatch.setattr(type(panel._cv_processor), "needs_every_frame", True, raising=False)
-    lg = MagicMock()
-    lg.is_recording = True
-    panel._tracking_logger = lg
-    panel._dispatch_frame_tick = MagicMock()
-    for ts in (1.0, 2.0, 3.0, 4.0):  # 1.0 in flight; 2.0, 3.0 queued; 4.0 evicts 2.0
+    logged = _recording_logger(panel)
+    for ts in (1.0, 2.0, 3.0, 4.0, 5.0):  # 1.0 in flight; 2.0, 3.0 evicted
         panel._submit_to_cv(_frame(ts))
-    assert panel._cv_frames_dropped == 1
-    lg.log_frame.assert_called_once_with(2.0, [])
-    assert [f.timestamp for f in panel._cv_queue] == [3.0, 4.0]
+    assert panel._cv_frames_dropped == 2
+    assert [f.timestamp for f in panel._cv_queue] == [4.0, 5.0]
+    for _ in range(3):
+        panel._process_cv_results_on_main_thread(_frame(panel._sent[-1]), [], [], None)
+    assert logged == sorted(logged) == [1.0, 2.0, 3.0, 4.0, 5.0]
+
+
+def test_default_mode_supersede_is_not_logged(panel):
+    logged = _recording_logger(panel)
+    for ts in (1.0, 2.0, 3.0):
+        panel._submit_to_cv(_frame(ts))
+    panel._process_cv_results_on_main_thread(_frame(1.0), [], [], None)
+    panel._process_cv_results_on_main_thread(_frame(3.0), [], [], None)
+    assert logged == [1.0, 3.0]
 
 
 def test_lag_signal_fires_once_each_way(panel, monkeypatch):
