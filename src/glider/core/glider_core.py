@@ -1280,6 +1280,7 @@ class GliderCore:
 
         # Stop video recording and collect all video paths
         video_paths: list[Path] = []
+        single_video: Path | None = None
 
         # Not gated on is_recording: that is False while PAUSED (and after a
         # writer error), which used to leave a paused-then-stopped run's video
@@ -1300,6 +1301,7 @@ class GliderCore:
             if video_path:
                 logger.info(f"Video saved to: {video_path}")
                 video_paths.append(video_path)
+                single_video = Path(video_path)
                 # Check for annotated video
                 annotated = self._video_recorder.annotated_file_path
                 if annotated and annotated.exists():
@@ -1344,8 +1346,29 @@ class GliderCore:
                     flow_duration_s=self.last_flow_duration_s
                 )
                 logger.info(f"Tracking data saved to: {tracking_path}")
+                self._export_identity(tracking_path, single_video)
             except Exception as e:
                 logger.error(f"Failed to stop tracking logger: {e}")
+
+    def _export_identity(self, tracking_path: Path | None, video: Path | None) -> None:
+        """Lay a live identity run out as Batch Pose files beside its video."""
+        cv = self._cv_processor
+        kp_path = self._tracking_logger.keypoints_file_path
+        if not (cv.identity_active and tracking_path and kp_path and video and video.exists()):
+            return
+        from glider.vision.identity_export import export_live_identity
+
+        s = cv.settings
+        export_live_identity(
+            tracking_path,
+            kp_path,
+            video,
+            Path(s.model_path or "model"),
+            [a["name"] for a in s.animals],
+            s.keypoint_names,
+            getattr(self._video_recorder, "_recording_fps", 30.0),
+            self._tracking_logger.frame_count,
+        )
 
     async def _set_all_devices_low(self) -> None:
         """Set all output devices to LOW/off state for safety.
