@@ -107,7 +107,13 @@ def test_behavior_input_draws_its_real_ports(qtbot):
     item = _ports("BehaviorInput")
 
     assert item.inputs == []
-    assert [name for name, _ in item.outputs] == ["Active", "Behavior", "On Enter", "On Exit"]
+    assert [name for name, _ in item.outputs] == [
+        "Active",
+        "Behavior",
+        "On Enter",
+        "On Exit",
+        "Visible",
+    ]
     assert item.outputs[2] == ("On Enter", PortType.EXEC)
     assert item.outputs[3] == ("On Exit", PortType.EXEC)
     assert item.outputs[0][1] == PortType.DATA

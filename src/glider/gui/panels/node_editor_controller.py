@@ -162,7 +162,10 @@ class NodeEditorController(QObject):
                 [],
                 ["Occupied", "Object Count", ">On Enter", ">On Exit", "Visible"],
             ),
-            "BehaviorInput": ([], ["Active", "Behavior", ">On Enter", ">On Exit"]),
+            "BehaviorInput": (
+                [],
+                ["Active", "Behavior", ">On Enter", ">On Exit", "Visible"],
+            ),
         }
 
         if nt in port_configs:
@@ -579,6 +582,23 @@ class NodeEditorController(QObject):
             )
             props_layout.addRow("Behavior:", behavior_combo)
 
+            animal_combo = QComboBox()
+            animal_combo.setEditable(True)
+            animal_combo.addItem("Any")
+            animal_combo.addItems(self._known_animals())
+            animal_combo.setCurrentText(saved_state.get("animal") or "Any")
+            animal_combo.currentTextChanged.connect(
+                lambda txt, nid=node_id: self._on_node_property_changed(
+                    nid, "animal", "" if txt.strip() in ("", "Any") else txt.strip()
+                )
+            )
+            props_layout.addRow("Animal:", animal_combo)
+            if not saved_state.get("animal") and self._identity_on():
+                id_note = QLabel("With identity on, pick an animal \u2014 Any receives nothing.")
+                id_note.setProperty("textRole", "muted")
+                id_note.setWordWrap(True)
+                props_layout.addRow(id_note)
+
             frames_spin = QSpinBox()
             frames_spin.setRange(1, 300)
             frames_spin.setSuffix(" frames")
@@ -978,8 +998,8 @@ class NodeEditorController(QObject):
                     ramp_idx += 1
                 ramp_device_combo.setCurrentIndex(ramp_current_index)
                 ramp_device_combo.currentIndexChanged.connect(
-                    lambda idx, nid=node_id, combo=ramp_device_combo: self._on_node_property_changed(
-                        nid, "ramp_device_id", combo.currentData()
+                    lambda idx, nid=node_id, combo=ramp_device_combo: (
+                        self._on_node_property_changed(nid, "ramp_device_id", combo.currentData())
                     )
                 )
                 props_layout.addRow("Ramp Device:", ramp_device_combo)
@@ -1392,6 +1412,12 @@ class NodeEditorController(QObject):
             return [a["name"] for a in self._core.cv_processor.settings.animals if a.get("name")]
         except Exception:  # noqa: BLE001 - a missing list must not break the panel
             return []
+
+    def _identity_on(self) -> bool:
+        try:
+            return self._core.cv_processor.settings.identity_mode != "off"
+        except Exception:  # noqa: BLE001
+            return False
 
     def _known_behaviors(self) -> list[str]:
         """Labels the currently loaded behavior model can emit, if any.

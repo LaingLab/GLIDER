@@ -239,6 +239,7 @@ PINNED += [
     ("ZoneInput", "animal", ""),
     ("BehaviorInput", "target_behavior", ""),
     ("BehaviorInput", "min_frames", 5),
+    ("BehaviorInput", "animal", ""),
 ]
 
 FIELD_TYPES = {"int", "hex", "float", "bool", "str", "enum", "device_ref", "ble_address", "object"}

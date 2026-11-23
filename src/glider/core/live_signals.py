@@ -45,6 +45,10 @@ class BehaviorEvent:
     timestamp: float | None = None
     keypoints: Any = None
     extra: dict[str, Any] = field(default_factory=dict)
+    # Named animal this classification belongs to; None = the single-animal publisher.
+    animal: str | None = None
+    # False while the animal is hidden; the label is then stale and must be ignored.
+    visible: bool = True
 
 
 class LiveSignalBus:
