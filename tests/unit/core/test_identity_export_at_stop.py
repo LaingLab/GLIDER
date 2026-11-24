@@ -31,12 +31,12 @@ async def test_export_gets_recorder_timing_and_runs_off_the_event_loop(tmp_path,
         ),
     )
     core._tracking_logger = SimpleNamespace(keypoints_file_path=tmp_path / "k.csv")
-    core._video_recorder = SimpleNamespace(first_frame_timestamp=12.5, fps=29.5, frame_count=40)
+    core._video_recorder = SimpleNamespace(frame_timestamps=[12.5, 12.6], fps=29.5)
     video = tmp_path / "v.mp4"
     video.write_bytes(b"")
     await core._export_identity(tmp_path / "t.csv", video)
     ((args, off_loop),) = calls
-    assert args[6:] == (29.5, 40, 12.5) and off_loop
+    assert args[6:] == (29.5, [12.5, 12.6]) and off_loop
     assert args[3] == Path("m.pt")
 
 
@@ -49,7 +49,7 @@ async def test_export_skipped_without_a_first_frame(tmp_path, monkeypatch):
     core = GliderCore()
     core._cv_processor = SimpleNamespace(identity_active=True, settings=MagicMock())
     core._tracking_logger = SimpleNamespace(keypoints_file_path=tmp_path / "k.csv")
-    core._video_recorder = SimpleNamespace(first_frame_timestamp=None, fps=30.0, frame_count=0)
+    core._video_recorder = SimpleNamespace(frame_timestamps=[], fps=30.0)
     video = tmp_path / "v.mp4"
     video.write_bytes(b"")
     await core._export_identity(tmp_path / "t.csv", video)

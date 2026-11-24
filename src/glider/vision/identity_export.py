@@ -5,8 +5,9 @@ CSVs found beside the video. This writes the same files a Batch Pose run would,
 so a recording made with identity on needs no special handling downstream.
 
 Rows are placed on video frames by capture timestamp, not by the logger's
-frame counter: video frame ``round((timestamp - t0) * fps)``, where ``t0`` is
-the capture time of the video's first frame.
+frame counter: each row goes to the video frame captured nearest its
+timestamp, and is dropped when no frame lies within half a frame interval
+(rows logged while recording was paused, or before/after the video).
 """
 
 from __future__ import annotations
@@ -34,8 +35,7 @@ def export_live_identity(
     names: list[str],
     keypoint_names: list[str],
     fps: float,
-    n_frames: int,
-    t0: float,
+    frame_ts,
 ) -> list[Path]:
     """Write one DLC CSV per named animal (plus identity sidecar); never raises."""
     try:
@@ -47,32 +47,41 @@ def export_live_identity(
             names,
             keypoint_names,
             fps,
-            n_frames,
-            t0,
+            np.asarray(frame_ts, dtype=float),
         )
     except Exception:
         logger.exception("Could not export live identity run for %s", video)
         return []
 
 
-def _video_frames(timestamps, t0: float, fps: float):
-    """0-based video frame of each logger ISO timestamp (naive local time)."""
+def _video_frames(timestamps, frame_ts: np.ndarray, fps: float) -> np.ndarray:
+    """0-based video frame of each logger ISO timestamp (naive local time), -1 if none.
+
+    ``frame_ts`` is the sorted capture time of every video frame.
+    """
     import pandas as pd
 
-    since = pd.to_datetime(timestamps) - pd.Timestamp(datetime.fromtimestamp(t0))
-    return (since.dt.total_seconds() * fps).round().astype(int)
+    ref = frame_ts[0]
+    since = pd.to_datetime(timestamps) - pd.Timestamp(datetime.fromtimestamp(ref))
+    t = since.dt.total_seconds().to_numpy() + ref
+    step = np.median(np.diff(frame_ts)) if len(frame_ts) > 1 else 1.0 / fps
+    hi = np.clip(np.searchsorted(frame_ts, t), 0, len(frame_ts) - 1)
+    lo = np.maximum(hi - 1, 0)
+    nearest = np.where(np.abs(frame_ts[hi] - t) < np.abs(t - frame_ts[lo]), hi, lo)
+    return np.where(np.abs(frame_ts[nearest] - t) <= step / 2, nearest, -1)
 
 
-def _export(tracking_csv, keypoints_csv, video, model, names, keypoint_names, fps, n_frames, t0):
+def _export(tracking_csv, keypoints_csv, video, model, names, keypoint_names, fps, frame_ts):
     import pandas as pd
 
+    n_frames = len(frame_ts)
     n_animals, n_kp = len(names), len(keypoint_names)
     kp_index = {k: i for i, k in enumerate(keypoint_names)}
     xy = np.full((n_animals, n_frames, n_kp, 2), np.nan)
     conf = np.full((n_animals, n_frames, n_kp), np.nan)
 
     kp = pd.read_csv(keypoints_csv)
-    kp["vf"] = _video_frames(kp["timestamp"], t0, fps)
+    kp["vf"] = _video_frames(kp["timestamp"], frame_ts, fps)
     kp = kp[(kp["object_id"] < n_animals) & (kp["vf"] >= 0) & (kp["vf"] < n_frames)]
     for frame, oid, name, x, y, c in zip(
         kp["vf"],
@@ -93,7 +102,7 @@ def _export(tracking_csv, keypoints_csv, video, model, names, keypoint_names, fp
     seen = [set() for _ in names]  # 0-based frames with a row
     flags: list[tuple[int, int, str]] = []
     if "animal" in tracking.columns:
-        frames = _video_frames(tracking["timestamp"], t0, fps)
+        frames = _video_frames(tracking["timestamp"], frame_ts, fps)
         for frame, animal, flag in zip(
             frames, tracking["animal"], tracking["identity_flag"], strict=True
         ):

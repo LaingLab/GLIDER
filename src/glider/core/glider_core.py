@@ -1358,10 +1358,10 @@ class GliderCore:
         cv = self._cv_processor
         rec = self._video_recorder
         kp_path = self._tracking_logger.keypoints_file_path
-        t0 = rec.first_frame_timestamp
+        frame_ts = list(rec.frame_timestamps)
         if not (cv.identity_active and tracking_path and kp_path and video and video.exists()):
             return
-        if t0 is None:  # no frame was ever written
+        if not frame_ts:  # no frame was ever written
             return
         from glider.vision import identity_export
 
@@ -1375,8 +1375,7 @@ class GliderCore:
             [a["name"] for a in s.animals],
             s.keypoint_names,
             rec.fps,
-            rec.frame_count,
-            t0,
+            frame_ts,
         )
 
     async def _set_all_devices_low(self) -> None:

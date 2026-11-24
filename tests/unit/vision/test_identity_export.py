@@ -20,15 +20,19 @@ TRACK_HDR = (
 
 
 T0 = 1_700_000_000.0  # capture time of the video's first frame
+FRAME_TS = [T0 + i / 30.0 for i in range(4)]  # a 4-frame video at 30 fps
+
+
+def _iso_at(ts):
+    return datetime.fromtimestamp(ts).isoformat(timespec="milliseconds")
 
 
 def _iso(video_frame):
     """Logger-style ISO timestamp of 0-based video frame ``video_frame`` at 30 fps."""
-    ts = T0 + video_frame / 30.0
-    return datetime.fromtimestamp(ts).isoformat(timespec="milliseconds")
+    return _iso_at(T0 + video_frame / 30.0)
 
 
-def _write(tmp_path, rows, offset=0):
+def _write(tmp_path, rows, offset=0, ts_of=None):
     """rows: (log frame, object_id, animal, flag, nose_x).
 
     Log frame ``f`` was captured at video frame ``f - 1 + offset``.
@@ -36,7 +40,7 @@ def _write(tmp_path, rows, offset=0):
     t = ["# GLIDER Tracking Data", "# Experiment,x", "", TRACK_HDR]
     k = ["frame,timestamp,elapsed_ms,flow_elapsed_ms,object_id,keypoint,x,y,confidence"]
     for frame, oid, animal, flag, nx in rows:
-        ts = _iso(frame - 1 + offset)
+        ts = ts_of(frame) if ts_of else _iso(frame - 1 + offset)
         t.append(f"{frame},{ts},0,0,{oid},mouse,0,0,1,1,.9,0,0,0,0,0,,0,{animal},{flag}")
         for name, dx in (("nose", nx), ("tail", nx + 1)):
             k.append(f"{frame},{ts},0,0,{oid},{name},{dx},2.0,0.9")
@@ -48,10 +52,10 @@ def _write(tmp_path, rows, offset=0):
     return tmp_path / "r_tracking.csv", tmp_path / "r_tracking_keypoints.csv", video
 
 
-def _run(tmp_path, rows, names, offset=0):
-    tr, kp, video = _write(tmp_path, rows, offset)
+def _run(tmp_path, rows, names, offset=0, frame_ts=FRAME_TS, ts_of=None):
+    tr, kp, video = _write(tmp_path, rows, offset, ts_of)
     model = tmp_path / "m.pt"
-    out = export_live_identity(tr, kp, video, model, names, KP, 30.0, 4, T0)
+    out = export_live_identity(tr, kp, video, model, names, KP, 30.0, frame_ts)
     return out, video, model
 
 
@@ -106,8 +110,7 @@ def test_failure_is_logged_not_raised(tmp_path, caplog):
             ["A"],
             KP,
             30.0,
-            4,
-            T0,
+            FRAME_TS,
         )
     assert out == [] and "Could not export" in caplog.text
 
@@ -141,3 +144,20 @@ def test_flags_land_on_video_frames_by_timestamp(tmp_path):
         "3,animal0,gap",
         "3,animal1,gap",
     }
+
+
+def test_paused_run_rows_follow_the_video_frames(tmp_path):
+    # Video frames 0-1, a 2 s pause (the recorder writes nothing), then 2-3.
+    # The logger kept logging through the pause; those rows have no frame.
+    frame_ts = [T0, T0 + 1 / 30, T0 + 2 + 2 / 30, T0 + 2 + 3 / 30]
+    log_ts = {1: frame_ts[0], 2: frame_ts[1], 3: T0 + 1.0, 4: frame_ts[2], 5: frame_ts[3]}
+    rows = [(f, 0, "A", "close" if f == 4 else "", 10 + f) for f in log_ts]
+    rows.append((3, 1, "B", "close", 77))  # logged mid-pause only
+    _run(tmp_path, rows, ["A", "B"], frame_ts=frame_ts, ts_of=lambda f: _iso_at(log_ts[f]))
+    a = from_dlc_csv(tmp_path / "rDLC_m_animals" / "animal0.csv")
+    assert a.xy.shape[0] == 4
+    assert [a.xy[i, 0, 0] for i in range(4)] == [11, 12, 14, 15]  # log frame 3 dropped
+    b = from_dlc_csv(tmp_path / "rDLC_m_animals" / "animal1.csv")
+    assert np.isnan(b.xy).all()
+    side = set((tmp_path / "rDLC_m_identity.csv").read_text().splitlines()[1:])
+    assert "2,animal0,close" in side and not any(",animal1,close" in r for r in side)
