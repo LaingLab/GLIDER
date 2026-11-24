@@ -24,7 +24,8 @@ see whether it actually loaded.
 
 import sys
 
-if sys.platform == "win32":
+# The splash child (``GLIDER.exe _splash``) never touches torch; skip the cost.
+if sys.platform == "win32" and sys.argv[1:2] != ["_splash"]:
     try:
         import torch  # noqa: F401  (imported for its DLL-load side effect)
     except Exception:

@@ -6,11 +6,7 @@ driver management, and flow execution. It has no GUI dependencies and
 can run as a standalone service.
 """
 
-from glider.core.data_recorder import DataRecorder
-from glider.core.experiment_session import ExperimentSession
-from glider.core.flow_engine import FlowEngine
-from glider.core.glider_core import GliderCore
-from glider.core.hardware_manager import HardwareManager
+import importlib
 
 __all__ = [
     "GliderCore",
@@ -19,3 +15,20 @@ __all__ = [
     "FlowEngine",
     "DataRecorder",
 ]
+
+_HOMES = {
+    "GliderCore": "glider_core",
+    "ExperimentSession": "experiment_session",
+    "HardwareManager": "hardware_manager",
+    "FlowEngine": "flow_engine",
+    "DataRecorder": "data_recorder",
+}
+
+
+def __getattr__(name: str):
+    # Lazy: glider_core imports glider.vision, which imports glider.core
+    # submodules. Eager imports here made that a cycle for anyone who touched
+    # glider.vision before glider.core.
+    if name in _HOMES:
+        return getattr(importlib.import_module(f"glider.core.{_HOMES[name]}"), name)
+    raise AttributeError(f"module 'glider.core' has no attribute {name!r}")
