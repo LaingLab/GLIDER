@@ -1,8 +1,11 @@
-"""YOLO pose labels: one text file per image, one line per animal.
+"""YOLO labels: one text file per image, one line per animal.
 
-A line is ``class cx cy w h  x1 y1 v1  x2 y2 v2 ...``, every coordinate
+A pose line is ``class cx cy w h  x1 y1 v1  x2 y2 v2 ...``, every coordinate
 normalised 0-1 against the image. Visibility follows the COCO convention
 Ultralytics trains on: 0 = not labelled, 1 = labelled but hidden, 2 = visible.
+
+A segmentation line is ``class x1 y1 x2 y2 ... xn yn``: the animal's outline
+as a closed polygon of at least three vertices, also normalised 0-1.
 
 The file's presence is what marks a frame as labelled. An image with no label
 file has not been looked at yet; that distinction is :class:`StudioProject`'s
@@ -23,10 +26,15 @@ __all__ = [
     "VISIBLE",
     "LabelFormatError",
     "PoseInstance",
+    "SegInstance",
     "format_pose_line",
+    "format_seg_line",
     "parse_pose_line",
+    "parse_seg_line",
     "read_labels",
+    "read_seg_labels",
     "write_labels",
+    "write_seg_labels",
 ]
 
 MISSING, HIDDEN, VISIBLE = 0, 1, 2
@@ -139,3 +147,91 @@ def read_labels(path: Path | str, n_keypoints: int) -> list[PoseInstance]:
         return []
     text = path.read_text(encoding="utf-8")
     return [parse_pose_line(line, n_keypoints) for line in text.splitlines() if line.strip()]
+
+
+# ----------------------------------------------------------------------
+# instance segmentation
+# ----------------------------------------------------------------------
+
+
+@dataclass
+class SegInstance:
+    """One animal's outline in one image.
+
+    Args:
+        polygon: ``(x, y)`` vertices in order round the outline, normalised 0-1.
+            The polygon is closed: the last vertex joins the first.
+        class_id: Index into the project's class names.
+    """
+
+    polygon: list[tuple[float, float]] = field(default_factory=list)
+    class_id: int = 0
+
+    @property
+    def complete(self) -> bool:
+        """Whether there are enough vertices to enclose an area."""
+        return len(self.polygon) >= 3
+
+    def box(self) -> tuple[float, float, float, float] | None:
+        """``(cx, cy, w, h)`` round the outline, or None with no vertices."""
+        if not self.polygon:
+            return None
+        xs = [p[0] for p in self.polygon]
+        ys = [p[1] for p in self.polygon]
+        x1, x2, y1, y2 = min(xs), max(xs), min(ys), max(ys)
+        return ((x1 + x2) / 2, (y1 + y2) / 2, x2 - x1, y2 - y1)
+
+
+def _clip01(v: float) -> float:
+    return min(max(v, 0.0), 1.0)
+
+
+def format_seg_line(instance: SegInstance) -> str | None:
+    """The label line for one outline, or None if it has fewer than 3 vertices."""
+    if not instance.complete:
+        return None
+    parts = [str(instance.class_id)]
+    for x, y in instance.polygon:
+        parts += [f"{_clip01(x):.6f}", f"{_clip01(y):.6f}"]
+    return " ".join(parts)
+
+
+def parse_seg_line(line: str) -> SegInstance:
+    """Read one segmentation label line."""
+    fields = line.split()
+    if len(fields) < 7 or len(fields) % 2 == 0:
+        raise LabelFormatError(
+            f"a segmentation line is a class and at least 3 x y pairs; got {len(fields)} values"
+        )
+    try:
+        class_id = int(fields[0])
+        values = [float(f) for f in fields[1:]]
+    except ValueError as e:
+        raise LabelFormatError(str(e)) from e
+    polygon = [(values[i], values[i + 1]) for i in range(0, len(values), 2)]
+    return SegInstance(polygon, class_id)
+
+
+def write_seg_labels(path: Path | str, instances: list[SegInstance]) -> bool:
+    """Write the outlines in one image; returns whether a file was written.
+
+    As :func:`write_labels`: outlines too short to save are left out, and with
+    none left the label file is removed rather than left empty.
+    """
+    path = Path(path)
+    lines = [line for i in instances if (line := format_seg_line(i)) is not None]
+    if not lines:
+        path.unlink(missing_ok=True)
+        return False
+    path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_bytes(path, ("\n".join(lines) + "\n").encode("utf-8"))
+    return True
+
+
+def read_seg_labels(path: Path | str) -> list[SegInstance]:
+    """Every outline in one image's label file; empty if there is no file."""
+    path = Path(path)
+    if not path.exists():
+        return []
+    text = path.read_text(encoding="utf-8")
+    return [parse_seg_line(line) for line in text.splitlines() if line.strip()]

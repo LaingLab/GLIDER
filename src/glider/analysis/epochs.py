@@ -119,6 +119,9 @@ def metric_catalog(rows: Iterable[dict]) -> list[Metric]:
     out += [Metric(f"hw_{device}_on_s", f"{device} on (s)", 2) for device in devices]
     if any("pups_retrieved" in row for row in rows):
         out += list(_RETRIEVAL)
+    # Plugin measures (glider.analysis.range_extensions), first-seen order.
+    extra = {m.key: m for r in rows for m in r.get("_extra_metrics", ())}
+    out += list(extra.values())
     return out + list(_THRESHOLDS)
 
 

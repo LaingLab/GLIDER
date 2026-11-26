@@ -265,3 +265,22 @@ class TestLayout:
         text = " ".join(lab.text() for lab in tab.findChildren(QLabel))
         assert "no_holdout" not in text
         assert "fitted on everything" in text
+
+
+class TestDetails:
+    def test_details_hold_reference_cards(self, qtbot, tmp_path):
+        """Verdict, per-behavior and confusion lead; reference cards fold away."""
+        tab = ReviewTab()
+        qtbot.addWidget(tab)
+        tab.load(_report(tmp_path))
+        assert tab.details_body.isHidden()
+        titles = " ".join(lab.text().upper() for lab in tab.details_body.findChildren(QLabel))
+        assert "SETTINGS" in titles and "TOP FEATURES" in titles
+        assert "TRAINING ROWS" in titles
+        # the leading cards are outside the folded body
+        lead = " ".join(
+            lab.text().upper() for c in tab._cards for lab in c.findChildren(QLabel)
+        )  # noqa: SLF001
+        assert "PER BEHAVIOR" in lead and "CONFUSION" in lead
+        tab.details_toggle.click()
+        assert not tab.details_body.isHidden()

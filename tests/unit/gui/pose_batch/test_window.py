@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from glider.gui.pose_batch.window import PoseBatchWindow, _DropList
+from glider.gui.pose_batch.window import PoseBatchWindow
 
 
 def _touch(path: Path) -> Path:
@@ -70,28 +70,97 @@ def window(qtbot):
 
 
 # --------------------------------------------------------------------------
-# drop list
+# the one table: drops, sources, remove
 # --------------------------------------------------------------------------
 
 
-def test_drop_list_dedupes_paths(qtbot, tmp_path):
-    widget = _DropList()
-    qtbot.addWidget(widget)
-    widget.add_paths([tmp_path, tmp_path])
-    assert widget.paths() == [tmp_path]
+def _drop_on(widget, *paths):
+    """Deliver a real file drop to *widget*."""
+    from PyQt6.QtCore import QMimeData, QPointF, Qt, QUrl
+    from PyQt6.QtGui import QDropEvent
+
+    mime = QMimeData()
+    mime.setUrls([QUrl.fromLocalFile(str(p)) for p in paths])
+    event = QDropEvent(
+        QPointF(5, 5),
+        Qt.DropAction.CopyAction,
+        mime,
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
+    )
+    widget.dropEvent(event)
+    return event
 
 
-def test_drop_list_emits_changed_on_add(qtbot, tmp_path):
-    widget = _DropList()
-    qtbot.addWidget(widget)
-    with qtbot.waitSignal(widget.changed, timeout=1000):
-        widget.add_paths([tmp_path])
+def test_there_is_no_separate_videos_list(window):
+    from PyQt6.QtWidgets import QListWidget
+
+    assert not window.findChildren(QListWidget)
+    assert window._cal_table.acceptDrops() is True
 
 
-def test_drop_list_accepts_drops(qtbot):
-    widget = _DropList()
-    qtbot.addWidget(widget)
-    assert widget.acceptDrops() is True
+def test_table_columns_are_video_folder_arena_scale(window):
+    table = window._cal_table
+    headers = [table.horizontalHeaderItem(i).text() for i in range(table.columnCount())]
+    assert headers == ["Video", "Folder", "Arena", "Scale"]
+
+
+def test_drop_folder_on_table_adds_videos(window, tmp_path):
+    _touch(tmp_path / "a.mp4")
+    _touch(tmp_path / "sub" / "b.mp4")
+    _drop_on(window._cal_table, tmp_path)
+    assert len(window._videos) == 2
+    assert window._cal_table.rowCount() == 2
+
+
+def test_drop_respects_the_recursive_setting(window, tmp_path):
+    _touch(tmp_path / "a.mp4")
+    _touch(tmp_path / "sub" / "b.mp4")
+    window._recursive.setChecked(False)
+    _drop_on(window._cal_table, tmp_path)
+    assert len(window._videos) == 1
+
+
+def test_sources_dedupe_and_emit(window, tmp_path):
+    _touch(tmp_path / "a.mp4")
+    window._sources.add_paths([tmp_path, tmp_path])
+    assert window._sources.paths() == [tmp_path]
+    assert len(window._videos) == 1
+
+
+def test_remove_drops_its_arena(window, tmp_path):
+    _touch(tmp_path / "a.mp4")
+    _touch(tmp_path / "b.mp4")
+    window._sources.add_paths([tmp_path])
+    _calibrate_all(window)
+    keep, gone = window._videos
+    window._cal_table.selectRow(1)
+    window._remove_selected()
+    assert window._videos == [keep]
+    assert window._cal_table.rowCount() == 1
+    assert window._calibrations.get_arena(gone) is None
+    assert window._calibrations.get(gone) is None
+    assert window._calibrations.get_arena(keep) is not None
+
+
+def test_removed_video_stays_out_until_its_folder_is_added_again(window, tmp_path):
+    _touch(tmp_path / "a.mp4")
+    _touch(tmp_path / "b.mp4")
+    window._sources.add_paths([tmp_path])
+    window._cal_table.selectRow(0)
+    window._remove_selected()
+    window._recursive.setChecked(False)
+    window._recursive.setChecked(True)
+    assert len(window._videos) == 1
+    window._add_paths([tmp_path / "a.mp4"])
+    assert len(window._videos) == 2
+
+
+def test_empty_table_says_what_to_do(window):
+    from PyQt6.QtWidgets import QLabel
+
+    texts = [w.text() for w in window._cal_table.viewport().findChildren(QLabel)]
+    assert "Drop video folders here, or Add Folder…" in texts
 
 
 # --------------------------------------------------------------------------
@@ -430,3 +499,268 @@ def test_experiment_type_is_stored(window):
     assert window._experiment_type == ""
     window.set_experiment_type("Pup Retrieval")
     assert window._experiment_type == "Pup Retrieval"
+
+
+# --------------------------------------------------------------------------
+# header: step strip, Settings popup, More menu
+# --------------------------------------------------------------------------
+
+
+def test_step_strip_tracks_progress(window, tmp_path):
+    assert window._steps.steps_text() == ["Model", "Videos", "Arenas", "Track"]
+    assert window._steps.current() == 0
+
+    for i in range(5):
+        _touch(tmp_path / f"v{i}.mp4")
+    window._model_path = tmp_path / "m.pt"
+    window._names_field.setText("a, b")
+    window._meta = types.SimpleNamespace(n_keypoints=2)
+    window._sources.add_paths([tmp_path])
+    for video in window._videos[:2]:
+        window._calibrations.set_arena(video, _arena_cal())
+    window._validate()
+
+    assert window._steps.steps_text() == ["Model ✓", "Videos · 5 ✓", "Arenas · 2 of 5", "Track"]
+    assert window._steps.current() == 2
+
+
+def _arena_cal():
+    from glider.vision.arena import ArenaCalibration
+
+    return ArenaCalibration(corners=[(0, 0), (100, 0), (100, 100), (0, 100)], frame_size=(640, 480))
+
+
+def test_settings_popup_holds_rare_settings(window):
+    popup = window._settings_popup
+    for widget in (
+        window._device_combo,
+        window._conf_spin,
+        window._require_gpu,
+        window._filter_group,
+        window._recursive,
+        window._overwrite,
+        window._master_field,
+    ):
+        assert widget.window() is popup
+    # ...and the everyday ones are not hiding in there.
+    for widget in (window._cal_table, window._names_field, window._animals_spin):
+        assert widget.window() is window
+
+
+def test_settings_button_opens_the_popup(window, qtbot):
+    window.show()
+    window._settings_button.click()
+    assert window._settings_popup.isVisible()
+    window._settings_popup.hide()
+
+
+def test_more_menu_actions(window):
+    labels = [a.text() for a in window._more_button.menu().actions() if a.text()]
+    assert labels == [
+        "Re-gate tracked CSVs…",
+        "Export multi-animal DLC CSV…",
+        "Remove all videos",
+    ]
+
+
+def test_more_menu_actions_run_the_old_handlers(window, monkeypatch):
+    calls = []
+    monkeypatch.setattr(window, "_start_regate", lambda: calls.append("regate"))
+    monkeypatch.setattr(window, "_start_export", lambda: calls.append("export"))
+    monkeypatch.setattr(window, "_remove_all", lambda: calls.append("remove"))
+    for action in (window._regate_action, window._export_action, window._remove_all_action):
+        action.setEnabled(True)
+        action.trigger()
+    assert calls == ["regate", "export", "remove"]
+
+
+def test_remove_all_drops_arenas(window, tmp_path, monkeypatch):
+    _touch(tmp_path / "a.mp4")
+    _touch(tmp_path / "b.mp4")
+    window._sources.add_paths([tmp_path])
+    videos = list(window._videos)
+    for video in videos:
+        window._calibrations.set_arena(video, _arena_cal())
+    prompts = _answer_overwrite(monkeypatch, _yes())
+    window._remove_all()
+    assert prompts  # arenas existed, so it asked first
+    assert window._videos == []
+    assert window._cal_table.rowCount() == 0
+    for video in videos:
+        assert window._calibrations.get_arena(video) is None
+        assert window._calibrations.get(video) is None
+
+
+def test_remove_all_declined_keeps_everything(window, tmp_path, monkeypatch):
+    from PyQt6.QtWidgets import QMessageBox
+
+    _touch(tmp_path / "a.mp4")
+    window._sources.add_paths([tmp_path])
+    window._calibrations.set_arena(window._videos[0], _arena_cal())
+    _answer_overwrite(monkeypatch, QMessageBox.StandardButton.No)
+    window._remove_all()
+    assert len(window._videos) == 1
+    assert window._calibrations.get_arena(window._videos[0]) is not None
+
+
+def test_remove_all_without_arenas_does_not_ask(window, tmp_path, monkeypatch):
+    _touch(tmp_path / "a.mp4")
+    window._sources.add_paths([tmp_path])
+    prompts = _answer_overwrite(monkeypatch, _yes())
+    window._remove_all()
+    assert not prompts
+    assert window._videos == []
+
+
+def _yes():
+    from PyQt6.QtWidgets import QMessageBox
+
+    return QMessageBox.StandardButton.Yes
+
+
+def test_master_file_defaults_with_popup_closed(window, tmp_path):
+    _touch(tmp_path / "a.mp4")
+    assert not window._settings_popup.isVisible()
+    window._sources.add_paths([tmp_path])
+    assert window._master_field.text() == str(tmp_path / "pose_calibration.json")
+
+
+def test_tour_points_at_the_table_and_settings(window):
+    targets = window.tour_targets()
+    assert targets["videos"] is window._calibration_card
+    assert targets["calibration"] is window._calibration_card
+    assert targets["filter"] is window._settings_button
+    assert targets["run"] is window._run_button
+
+
+# --------------------------------------------------------------------------
+# footer: Track button, progress, folded log
+# --------------------------------------------------------------------------
+
+
+def _running(window, tmp_path, monkeypatch):
+    """Start a real run whose worker never touches inference."""
+    from glider.gui.pose_batch import worker as worker_mod
+
+    class Idle(worker_mod.PoseBatchWorker):
+        def run(self):
+            pass
+
+    monkeypatch.setattr(worker_mod, "PoseBatchWorker", Idle)
+    _ready(window, tmp_path)
+    window._start_worker()
+
+
+def test_track_button_counts_videos(window, tmp_path):
+    assert window._run_button.text() == "Track 0 Videos"
+    _touch(tmp_path / "a.mp4")
+    window._sources.add_paths([tmp_path])
+    assert window._run_button.text() == "Track 1 Video"
+    _touch(tmp_path / "more" / "b.mp4")
+    window._sources.add_paths([tmp_path / "more"])
+    assert window._run_button.text() == "Track 2 Videos"
+
+
+def test_footer_passes_validation_message_through(window):
+    # Fail-if-no-GPU is enforced by the worker, so the footer passes the existing
+    # validation message through unchanged rather than inventing a GPU one.
+    assert window._blocker_label.text() == "Select a model."
+    assert not window._blocker_label.isHidden()
+
+
+def test_blocker_clears_when_runnable(window, tmp_path):
+    _ready(window, tmp_path)
+    assert window._blocker_label.text() == ""
+
+
+def test_cancel_only_while_running(window, tmp_path, monkeypatch):
+    assert window._cancel_button.isHidden()
+    assert window._progress_panel.isHidden()
+    _running(window, tmp_path, monkeypatch)
+    try:
+        assert not window._cancel_button.isHidden()
+        assert not window._progress_panel.isHidden()
+        assert window._run_button.isHidden()
+    finally:
+        window._teardown_thread()
+    assert window._cancel_button.isHidden()
+    assert not window._run_button.isHidden()
+
+
+def test_progress_label_uses_the_runs_own_video_list(window, tmp_path, monkeypatch):
+    _running(window, tmp_path, monkeypatch)
+    try:
+        started = window._videos[0].name
+        window._videos = []  # Add Folder / drop / master load mid-run
+        window._on_progress(0, 1)
+        assert window._video_label.text() == started
+    finally:
+        window._teardown_thread()
+
+
+def test_new_run_starts_with_log_closed(window, tmp_path, monkeypatch):
+    window._log_toggle.setChecked(True)
+    _running(window, tmp_path, monkeypatch)
+    try:
+        assert not window._log_toggle.isChecked()
+    finally:
+        window._teardown_thread()
+
+
+def test_more_button_has_one_arrow(window):
+    assert window._more_button.text() == "More ▾"
+    assert "menu-indicator" in window._more_button.styleSheet()
+
+
+def test_strip_shows_tracking_k_of_n(window, tmp_path, monkeypatch):
+    _running(window, tmp_path, monkeypatch)
+    try:
+        window._on_progress(1, 5)
+        assert window._steps.steps_text()[3] == "Tracking 2 of 5"
+        assert window._overall_bar.value() == 2
+    finally:
+        window._teardown_thread()
+    assert window._steps.steps_text()[3] == "Track"
+
+
+def test_remove_is_disabled_while_running(window, tmp_path, monkeypatch):
+    _running(window, tmp_path, monkeypatch)
+    try:
+        assert not window._remove_all_action.isEnabled()
+        assert not window._remove_button.isEnabled()
+    finally:
+        window._teardown_thread()
+    assert window._remove_all_action.isEnabled()
+    assert window._remove_button.isEnabled()
+
+
+def test_log_is_collapsed_by_default(window):
+    assert window._log.isHidden()
+    assert window._log_toggle.text() == "▸ Log (0 lines)"
+
+
+def test_log_toggle_counts_and_opens(window):
+    window._add_log("one")
+    window._add_log("two")
+    assert window._log.isHidden()
+    assert window._log_toggle.text() == "▸ Log (2 lines)"
+    window._log_toggle.click()
+    assert not window._log.isHidden()
+    assert window._log_toggle.text() == "▾ Log (2 lines)"
+
+
+def test_log_opens_on_error(window):
+    window._add_log("[1/2] a.mp4")
+    assert window._log.isHidden()
+    window._add_log("FAILED a.mp4: boom")
+    assert not window._log.isHidden()
+
+
+def test_settings_summary_shows_active_options(window):
+    assert window._settings_summary.text() == ""
+    window._overwrite.setChecked(True)
+    window._filter_group.setChecked(True)
+    assert window._settings_summary.text() == "Smoothing on · Overwrite on"
+    window._overwrite.setChecked(False)
+    window._filter_group.setChecked(False)
+    assert window._settings_summary.text() == ""

@@ -28,7 +28,8 @@ def test_a_second_run_is_refused_while_one_is_live(qtbot, handler):
     tab._train_thread = None
 
 
-def test_fit_disables_cross_validate(qtbot, monkeypatch):
+def test_fit_disables_the_fit_menu(qtbot, monkeypatch):
+    """Cross-validate lives in the Fit button's menu, so disabling it covers both."""
     from glider.gui.behavior import window
 
     tab = window.TrainTab()
@@ -39,5 +40,5 @@ def test_fit_disables_cross_validate(qtbot, monkeypatch):
 
     tab._on_fit()
 
-    assert not tab._cv_btn.isEnabled()
+    assert not tab._fit_btn.isEnabled()
     tab._train_thread = None

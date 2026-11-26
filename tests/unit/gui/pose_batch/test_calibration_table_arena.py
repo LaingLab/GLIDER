@@ -51,9 +51,9 @@ def _with_arena(video, corners=TRAPEZOID, *, confirmed: bool = True) -> Calibrat
 
 
 class TestArenaColumn:
-    def test_no_arena_shows_a_dash(self, table, video):
+    def test_no_arena_says_what_to_do(self, table, video):
         table.set_videos([video])
-        assert table.item(0, ARENA_COLUMN).text() == "—"
+        assert table.item(0, ARENA_COLUMN).text() == "Needs arena — double-click"
 
     def test_a_drawn_arena_is_marked(self, table, video):
         table.set_calibration_set(_with_arena(video))
@@ -89,22 +89,22 @@ class TestScaleSource:
         table.set_calibration_set(cal_set)
         table.set_videos([video])
         expected = cal_set.px_per_mm(video)
-        assert f"{expected:.3f}" in table.item(0, 2).text()
+        assert f"{expected:.2f} px/mm" in table.item(0, 3).text()
 
     def test_a_video_with_only_an_arena_reads_as_calibrated(self, table, video):
         table.set_calibration_set(_with_arena(video))
         table.set_videos([video])
-        assert "Calibrated" in table.item(0, 4).text()
+        assert table.item(0, ARENA_COLUMN).text().startswith("✓")
 
     def test_the_arena_scale_wins_over_the_line(self, table, video):
         cal_set = _with_arena(video)
         cal_set.set(video, _line(6.4))
         table.set_calibration_set(cal_set)
         table.set_videos([video])
-        assert "6.400" not in table.item(0, 2).text()
+        assert "6.40" not in table.item(0, 3).text()
 
 
-class TestStatusColumn:
+class TestArenaStatusPhrases:
     """The status column answers "can this run", not "is there a scale".
 
     A row reading "Calibrated" beside a disabled Run button sends the operator
@@ -114,20 +114,20 @@ class TestStatusColumn:
     @pytest.mark.parametrize(
         "state, expected",
         [
-            (None, "Needs arena"),
-            ("unconfirmed", "confirm it"),
+            (None, "Needs arena — double-click"),
+            ("unconfirmed", "Copied — open to confirm"),
         ],
     )
-    def test_status_column_reports_arena_state(self, table, video, state, expected):
+    def test_arena_status_phrases(self, table, video, state, expected):
         cal_set = _with_arena(video, confirmed=False) if state else CalibrationSet()
         table.set_calibration_set(cal_set)
         table.set_videos([video])
-        assert expected in table.item(0, 4).text()
+        assert table.item(0, ARENA_COLUMN).text() == expected
 
     def test_a_confirmed_arena_still_reads_as_calibrated(self, table, video):
         table.set_calibration_set(_with_arena(video))
         table.set_videos([video])
-        assert "Calibrated" in table.item(0, 4).text()
+        assert table.item(0, ARENA_COLUMN).text().startswith("✓")
 
     def test_a_drawn_line_alone_does_not_read_as_calibrated(self, table, video):
         """The line still supplies a scale, but Run will not accept it."""
@@ -135,7 +135,7 @@ class TestStatusColumn:
         cal_set.set(video, _line())
         table.set_calibration_set(cal_set)
         table.set_videos([video])
-        assert "Needs arena" in table.item(0, 4).text()
+        assert "Needs arena" in table.item(0, ARENA_COLUMN).text()
 
 
 class TestRequests:

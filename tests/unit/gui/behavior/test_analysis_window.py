@@ -13,6 +13,7 @@ pytest.importorskip("PyQt6")
 
 from PyQt6.QtCore import QSettings, Qt  # noqa: E402
 from PyQt6.QtGui import QColor, QKeyEvent  # noqa: E402
+from PyQt6.QtWidgets import QPushButton  # noqa: E402
 
 from glider.analysis.behavior.session_view import SessionView  # noqa: E402
 from glider.gui.behavior.analysis_window import (  # noqa: E402
@@ -150,13 +151,13 @@ class TestAnalysisWindow:
     def test_the_summary_marks_segment_thresholds_as_comparison_only(self, qtbot, tmp_path):
         win = self._win(qtbot, tmp_path)
         win._bar.set_selection(0, 200)
-        text = win._summary.text()
+        text = win._inspector.movement_tiles[0].toolTip()
         assert "comparison" in text and "unchanged" in text
 
     def test_an_uncalibrated_session_says_so_rather_than_reporting_pixels(self, qtbot, tmp_path):
         win = self._win(qtbot, tmp_path)
         win._bar.set_selection(0, 200)
-        assert "no calibration" in win._summary.text().lower()
+        assert "no calibration" in win._inspector.movement_tiles[0].toolTip().lower()
 
     def test_zones_are_sized_in_pixels_without_a_calibration(self, qtbot, tmp_path):
         win = self._win(qtbot, tmp_path)
@@ -199,12 +200,12 @@ class TestAnalysisWindow:
 
     def test_the_repair_button_is_hidden_when_nothing_needs_repairing(self, qtbot, tmp_path):
         win = self._win(qtbot, tmp_path)
-        assert win._fix_resolution.isHidden() is True
+        assert win._fix_resolution_action.isVisible() is False
 
     def test_the_repair_button_appears_for_a_sidecar_without_a_resolution(self, qtbot, tmp_path):
         """Runs from before the field existed must still be viewable."""
         win = self._win(qtbot, tmp_path, with_resolution=False)
-        assert win._fix_resolution.isHidden() is False
+        assert win._fix_resolution_action.isVisible() is True
 
     def test_repairing_writes_the_resolution_and_reloads(self, qtbot, tmp_path, monkeypatch):
         win = self._win(qtbot, tmp_path, with_resolution=False)
@@ -217,7 +218,7 @@ class TestAnalysisWindow:
         monkeypatch.setattr("glider.vision.video_source.video_resolution", lambda _p: (800, 600))
         win._resolution_from_video()
         assert win._view.resolution == (800, 600)
-        assert win._fix_resolution.isHidden() is True
+        assert win._fix_resolution_action.isVisible() is False
 
     def test_an_unreadable_video_is_reported_and_changes_nothing(
         self, qtbot, tmp_path, monkeypatch
@@ -275,10 +276,10 @@ class TestWhenPosesAreElsewhere:
         win = AnalysisWindow()
         qtbot.addWidget(win)
         win.load(self._session_without_poses(tmp_path))
-        assert win._pick_poses.isHidden() is False
+        assert win._pick_poses_action.isVisible() is True
 
         win.load(_session(tmp_path / "with_poses"))
-        assert win._pick_poses.isHidden() is True
+        assert win._pick_poses_action.isVisible() is False
 
     def test_the_blank_canvas_points_at_the_button(self, qtbot, tmp_path):
         win = AnalysisWindow()
@@ -318,7 +319,7 @@ class TestWhenPosesAreElsewhere:
         win._choose_pose_csv()
         assert win._view.xy is not None
         assert win._view.pose_path == chosen
-        assert win._pick_poses.isHidden() is True
+        assert win._pick_poses_action.isVisible() is False
 
     def test_the_summary_names_the_pose_file_that_was_used(self, qtbot, tmp_path):
         win = AnalysisWindow()
@@ -605,9 +606,9 @@ class TestACohortOfSessions:
         win = AnalysisWindow()
         qtbot.addWidget(win)
         win.load_many(self._cohort(tmp_path))
-        assert win._export_btn.isEnabled() is False
+        assert win._export_window_action.isEnabled() is False
         win._bar.set_selection(0, 99)
-        assert win._export_btn.isEnabled() is True
+        assert win._export_window_action.isEnabled() is True
 
 
 class TestClearingTheRangeClearsItsNumbers:
@@ -1565,7 +1566,7 @@ class TestEditingKeys:
         win._bar.set_selection(100, 199)
         _key(win, Qt.Key.Key_Escape)
         assert win._bar.selection() is None
-        assert win._export_btn.isEnabled() is False
+        assert win._export_window_action.isEnabled() is False
 
     def test_l_plays_and_doubles(self, qtbot, tmp_path):
         win = self._win(qtbot, tmp_path)
@@ -1955,9 +1956,10 @@ class TestTheTopBarMenus:
     def test_the_menu_buttons_are_one_size(self, qtbot):
         win = AnalysisWindow()
         qtbot.addWidget(win)
+        win._body.setCurrentIndex(1)  # the editor's controls, as with a session open
         win.show()
         qtbot.waitExposed(win)
-        buttons = (win._open_btn, win._zones_btn, win._export_menu_btn)
+        buttons = (win._open_btn, win._setup_btn, win._export_menu_btn)
         assert len({(b.width(), b.height()) for b in buttons}) == 1
         assert win._tour_btn.height() == win._open_btn.height()
 
@@ -1971,9 +1973,10 @@ class TestTheTopBarMenus:
         qtbot.addWidget(win)
         win._export_menu_btn.setText("Export everything")
         win._even_out_menus()
+        win._body.setCurrentIndex(1)
         win.show()
         qtbot.waitExposed(win)
-        buttons = (win._open_btn, win._zones_btn, win._export_menu_btn)
+        buttons = (win._open_btn, win._setup_btn, win._export_menu_btn)
         assert len({b.width() for b in buttons}) == 1
 
 
@@ -2161,7 +2164,7 @@ class TestMarkersInTheWindow:
         win._editor.name.setText("door stuck")
         win._editor.done_btn.click()
         assert self._saved(folder)["markers"][0]["name"] == "door stuck"
-        assert win._inspector.tabText(2) == "Markers (1)"
+        assert win._inspector.tabText(1) == "Markers (1)"
 
     def test_the_editor_deletes_the_marker(self, qtbot, tmp_path):
         win, folder = self._win(qtbot, tmp_path)
@@ -2272,11 +2275,13 @@ class TestMarkersInTheWindow:
         win._pool.select(1 - win._shown)
         assert [m.name for m in win._bar.markers()] == ["Stim"]
 
-    def test_the_status_bar_counts_markers(self, qtbot, tmp_path):
+    def test_the_markers_tab_counts_markers(self, qtbot, tmp_path):
+        """Once the status bar's count; the status bar now holds messages only."""
         win, _folder = self._win(qtbot, tmp_path)
         _key(win, Qt.Key.Key_M)
         win._editor.close()
-        assert "1 marker" in win._status.text()
+        tabs = win._inspector
+        assert "Markers (1)" in [tabs.tabText(i) for i in range(tabs.count())]
 
 
 class TestTimeBinExport:
@@ -2303,6 +2308,30 @@ class TestTimeBinExport:
         assert first["groom_s"].tolist() == pytest.approx([5.0, 5.0])
         assert first["rear_s"].tolist() == pytest.approx([0.0, 0.0])
         assert second["rear_s"].tolist() == pytest.approx([5.0, 5.0])
+
+    def test_plugin_measures_become_bin_columns(self, qtbot, tmp_path, monkeypatch):
+        """glider.range_metrics: a plugin's per-range values land in every bin row."""
+        from glider.analysis.epochs import Metric
+
+        class Frames:
+            name = "fake"
+
+            def metrics(self):
+                return [Metric("fake_first", "First frame", 0), Metric("fake_last", "Last", 0)]
+
+            def values(self, view, start, end):
+                return {"fake_first": float(start), "fake_last": float(end)}
+
+        monkeypatch.setattr(
+            "glider.analysis.range_extensions.load_range_metric_providers", lambda: [Frames()]
+        )
+        win = self._win(qtbot, tmp_path)
+        frame = win.bin_frame(0.0, 10.0, 5.0, "tidy")
+        second = frame[frame["bin"] == "5-10 s"]
+        assert second["fake_first"].tolist() == [150.0, 150.0]
+        assert second["fake_last"].tolist() == [299.0, 299.0]
+        book = win.bin_frame(0.0, 10.0, 5.0, "sheets")
+        assert any("First frame" in name for name in book)
 
     def test_wide_is_a_row_per_session(self, qtbot, tmp_path):
         win = self._win(qtbot, tmp_path)
@@ -2610,23 +2639,14 @@ class TestTheEpochTableInTheWindow:
 
     def test_the_export_menu(self, qtbot, tmp_path):
         win = self._cohort(qtbot, tmp_path)
-        assert [a.text() for a in win._export_menu_btn.menu().actions()] == [
-            "Range stats (CSV)…",
-            "Epoch table, tidy (CSV)…",
-            "Epoch table, wide (CSV)…",
-            "Time bins (CSV)…",
-            "Markers (CSV)…",
-            "Retrieval tables (CSV)…",
-            "Nest distance per frame (CSV)…",
-            "Heatmap (PNG + CSV)…",
-            "Current frame (PNG)…",
-        ]
+        texts = _menu_texts(win._export_menu_btn.menu())
+        assert "Epoch table, tidy (CSV)…" in texts and "Epoch table, wide (CSV)…" in texts
 
-    def test_the_markers_tab_opens_the_epoch_table(self, qtbot, tmp_path):
+    def test_the_epoch_table_is_a_timeline_tab(self, qtbot, tmp_path):
+        """Reached from its tab under the timeline (the Markers tab's button is gone)."""
         win = self._cohort(qtbot, tmp_path)
-        win._tables.setCurrentIndex(0)
-        win._inspector.epoch_btn.click()
-        assert win._tables.currentWidget() is win._epoch
+        tabs = win._tables
+        assert tabs.tabText(tabs.indexOf(win._epoch)).startswith("Epoch table")
 
     def test_the_current_range_survives_a_switch_to_a_session_it_does_not_reach(
         self, qtbot, tmp_path
@@ -2811,14 +2831,14 @@ class TestReviewFixes:
 
 
 class TestExperimentType:
-    def test_the_selector_is_labelled_protocol(self, qtbot):
-        from PyQt6.QtWidgets import QLabel
-
+    def test_the_selector_is_named_experiment_type(self, qtbot):
+        """Once a "Protocol" box in the bar; now a Setup submenu that names the choice."""
         win = AnalysisWindow()
         qtbot.addWidget(win)
-        [label] = [lab for lab in win.findChildren(QLabel) if lab.buddy() is win._type_combo]
-        assert label.text() == "Protocol"
-        assert "protocol" in win._type_combo.toolTip().lower()
+        assert win._type_menu.menuAction() in win._setup_btn.menu().actions()
+        assert win._type_menu.title() == "Experiment type: None"
+        win.set_experiment_type("Pup Retrieval (P4)")
+        assert win._type_menu.title() == "Experiment type: Pup Retrieval (P4)"
 
     def test_starts_at_none_and_follows_set_experiment_type(self, qtbot):
         win = AnalysisWindow()
@@ -2944,6 +2964,15 @@ def no_dialogs(monkeypatch):
 
 @pytest.mark.usefixtures("no_dialogs")
 class TestOpenVideo:
+    def test_a_poses_only_range_shows_no_behavior_section(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.open_path(_pup_video(tmp_path))
+        win._bar.set_selection(0, 10)
+        assert win._bouts.rowCount() == 0
+        assert win._inspector.behavior_title.isHidden()
+        assert not win._inspector.movement_title.isHidden()
+
     def test_open_video_loads_a_bare_video(self, qtbot, tmp_path, monkeypatch):
         video = _pup_video(tmp_path)
         win = AnalysisWindow()
@@ -3580,15 +3609,15 @@ class TestRetrievalOnTheVideo:
 
     def test_the_overlay_and_its_toggle_follow_the_preset(self, qtbot, tmp_path):
         win = self._win(qtbot, _scorable(tmp_path), experiment_type="")
-        assert win._transport.pups_on.isHidden()
+        assert not win._transport.pups_on.isVisible()
         assert win._canvas._pups is None
         win.set_experiment_type("Pup Retrieval")
-        assert not win._transport.pups_on.isHidden()
+        assert win._transport.pups_on.isVisible()
         assert win._canvas._pups is win._view.pups
         assert win._canvas._retrieval is win._retrievals[0]
         assert win._canvas._nest_at(0).name == "nest"
         win.set_experiment_type("Open Field")
-        assert win._transport.pups_on.isHidden()
+        assert not win._transport.pups_on.isVisible()
         assert win._canvas._pups is None
 
     def test_the_nest_nose_line_and_a_hidden_pup_are_drawn(self, qtbot, tmp_path):
@@ -3605,7 +3634,7 @@ class TestRetrievalOnTheVideo:
         qtbot.addWidget(win)
         win.set_experiment_type("Pup Retrieval")
         win.load(_session(tmp_path / "etho"))
-        assert win._transport.pups_on.isHidden()
+        assert not win._transport.pups_on.isVisible()
         assert win._canvas._pups is None
 
     def test_retyping_the_type_does_not_republish(self, qtbot, tmp_path, monkeypatch):
@@ -3811,8 +3840,20 @@ class TestArenaGrid:
     def test_without_an_arena_it_says_how_to_get_one(self, qtbot, tmp_path):
         win = self._win(qtbot, tmp_path, with_arena=False)
         win._bar.set_selection(0, 299)
-        assert win._inspector.cells_visited.text() == "—"
-        assert "Draw arena" in win._inspector.exploration_text.text()
+        assert win._inspector.exploration.isHidden()
+        assert not win._inspector.arena_prompt.isHidden()
+
+    def test_the_arena_prompt_draws_one(self, qtbot, tmp_path, monkeypatch):
+        win = self._win(qtbot, tmp_path, with_arena=False)
+        drawn = []
+        monkeypatch.setattr(win, "_draw_arena", lambda: drawn.append(True))
+        win._inspector.draw_arena_btn.click()
+        assert drawn == [True]
+
+    def test_with_an_arena_exploration_shows(self, qtbot, tmp_path):
+        win = self._win(qtbot, tmp_path)
+        assert not win._inspector.exploration.isHidden()
+        assert win._inspector.arena_prompt.isHidden()
 
     def test_exploration_reaches_the_cohort_rows_and_epoch_metrics(self, qtbot, tmp_path):
         from glider.analysis.epochs import metric_catalog
@@ -3822,6 +3863,20 @@ class TestArenaGrid:
         assert rows[0]["cells_entered"] == 2
         assert rows[0]["explored_percent"] == pytest.approx(200 / 9)
         assert "explored_percent" in [m.key for m in metric_catalog(rows)]
+
+    def test_time_bins_accumulate_exploration_from_the_first_bin(self, qtbot, tmp_path):
+        # 10 s at 30 fps; the walk is in cell 0 to frame 212, then cell 1. On its
+        # own the last 2.5 s bin sees only cell 1; summed from the start it is 2.
+        win = self._win(qtbot, tmp_path)
+        frame = win.bin_frame(0.0, 10.0, 2.5, "tidy")
+        assert frame["cells_entered_cumulative"].tolist() == [1, 1, 2, 2]
+        assert frame["explored_percent_cumulative"].tolist() == pytest.approx(
+            [100 / 9, 100 / 9, 200 / 9, 200 / 9]
+        )
+        assert "explored_percent" not in frame
+        assert win.range_rows(7.5, 10.0)[0]["cells_entered"] == 1  # the epoch table is per range
+        sheets = win.bin_frame(0.0, 10.0, 2.5, "sheets")
+        assert "Explored %, cumulative" in sheets
 
     def test_an_arena_set_here_is_saved_beside_the_session(self, qtbot, tmp_path):
         from glider.analysis.behavior.exploration import read_arena
@@ -3856,3 +3911,347 @@ class TestArenaGrid:
         assert green_on_first_line()
         canvas.set_show_arena(False)
         assert not green_on_first_line()
+
+
+class TestTheEmptyState:
+    """Nothing open: one card that says what to do, not the editor's controls."""
+
+    def test_empty_state_until_a_session_opens(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        assert win._body.currentIndex() == 0
+        assert win._body.currentWidget() is win._empty
+        win.load(_session(tmp_path / "v"))
+        assert win._body.currentIndex() == 1
+
+    def test_empty_card_buttons_open(self, qtbot, tmp_path, monkeypatch):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        buttons = {b.text(): b for b in win._empty.findChildren(QPushButton)}
+        assert list(buttons) == ["Open Recording…", "Open File…", "Open Cohort Folder…"]
+        assert buttons["Open Recording…"].property("role") == "primary"
+        calls = []
+        for name in ("_open_recording", "_open", "_open_folder"):
+            monkeypatch.setattr(win, name, lambda n=name: calls.append(n))
+        for button in buttons.values():
+            button.click()
+        assert calls == ["_open_recording", "_open", "_open_folder"]
+
+    def test_a_drop_on_the_empty_card_opens_it(self, qtbot, tmp_path):
+        from PyQt6.QtCore import QMimeData, QPointF, QUrl
+        from PyQt6.QtGui import QDropEvent
+
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        assert win._empty.acceptDrops()
+        mime = QMimeData()
+        mime.setUrls([QUrl.fromLocalFile(str(_session(tmp_path / "v")))])
+        event = QDropEvent(
+            QPointF(5, 5),
+            Qt.DropAction.CopyAction,
+            mime,
+            Qt.MouseButton.NoButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        win._empty.dropEvent(event)
+        assert win._pool.count() == 1
+        assert win._body.currentIndex() == 1
+
+    def test_pool_shows_from_two_sessions(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        one = _session(tmp_path / "a")
+        win.load(one)
+        assert win._pool.isHidden()
+        win.load_many([one, _session(tmp_path / "b")])
+        assert not win._pool.isHidden()
+        win.load(one)
+        assert win._pool.isHidden()
+
+    def test_the_view_menu_still_hides_a_cohorts_pool(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load_many([_session(tmp_path / "a"), _session(tmp_path / "b")])
+        win._view_actions["sessions"].setChecked(False)
+        assert win._pool.isHidden()
+        win._view_actions["sessions"].setChecked(True)
+        assert not win._pool.isHidden()
+
+    def test_the_tour_gives_the_empty_card_back(self, qtbot):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        pages = []
+        win._body.currentChanged.connect(pages.append)
+        win.start_tour()
+        tour = win._tour
+        for _ in range(len(tour._steps)):
+            tour._next()
+        assert 1 in pages  # it brought the editor forward to point at it
+        assert win._body.currentIndex() == 0
+
+    def test_the_first_show_tour_gives_the_empty_card_back(self, qtbot, tmp_path, monkeypatch):
+        from glider.gui.onboarding import tour as tour_module
+
+        offered = []
+
+        def offer(host, steps, complete_key, **_):
+            # A first show, whatever this machine's settings say.
+            settings = QSettings(str(tmp_path / "s.ini"), QSettings.Format.IniFormat)
+            tour = tour_module.Tour(host, steps=steps, settings=settings)
+            tour.start()
+            offered.append(tour)
+            return tour
+
+        monkeypatch.setattr(tour_module, "offer_tour_once", offer)
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        pages = []
+        win._body.currentChanged.connect(pages.append)
+        win.show()
+        tour = offered[0]
+        for _ in range(len(tour._steps) - 1):
+            tour._next()
+        assert 1 in pages
+        tour._finish()  # Skip or Esc mid-tour
+        assert win._body.currentIndex() == 0
+
+
+def _menu_texts(menu):
+    return [a.text() for a in menu.actions() if not a.isSeparator()]
+
+
+class TestTheTopBar:
+    """Open ▾ · session + pills · Setup ▾ · View ▾ · Export ▾ · ?: one place for each job."""
+
+    def test_setup_menu_holds_analysis_setup(self, qtbot, tmp_path):
+        from PyQt6.QtWidgets import QLabel
+
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        menu = win._setup_btn.menu()
+        assert _menu_texts(menu) == [
+            "Experiment type: None",
+            "Arena",
+            "Zones",
+            "Scale…",
+            "Choose pose CSV…",
+            "Set arena size from video…",
+        ]
+        by_text = {a.text(): a for a in menu.actions()}
+        assert _menu_texts(by_text["Arena"].menu()) == ["Draw arena…", "Load arena…"]
+        assert _menu_texts(by_text["Zones"].menu()) == [
+            "Draw zones…",
+            "Load zones…",
+            "Clear zones",
+        ]
+        types = _menu_texts(by_text["Experiment type: None"].menu())
+        assert types[0] == "None" and "Pup Retrieval" in types
+        # The old Protocol box is gone from the bar.
+        assert win._type_combo.isHidden()
+        assert not [lab for lab in win.findChildren(QLabel) if lab.text() == "Protocol"]
+        # The fixes show only when they apply, as the Session tab's buttons do.
+        win.load(_session(tmp_path / "v", with_resolution=False))
+        assert not win._pick_poses_action.isVisible()
+        assert win._fix_resolution_action.isVisible()
+
+    def test_export_menu_is_the_one_export_place(self, qtbot):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        assert _menu_texts(win._export_menu_btn.menu()) == [
+            "This range (CSV)…",
+            "Markers (CSV)…",
+            "Epoch table, tidy (CSV)…",
+            "Epoch table, wide (CSV)…",
+            "Time bins (CSV)…",
+            "Heatmap (PNG + CSV)…",
+            "Current frame (PNG)…",
+            "Retrieval tables (CSV)…",
+            "Nest distance per frame (CSV)…",
+        ]
+        inspector_buttons = [b.text() for b in win._inspector.findChildren(QPushButton)]
+        assert not [t for t in inspector_buttons if "Export" in t or "Epoch" in t]
+
+    def test_experiment_type_reveals_retrieval(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load_video(_pup_video(tmp_path))
+        inspector = win._inspector
+        assert not inspector.isTabVisible(inspector.indexOf(inspector.retrieval))
+        types = win._type_menu
+        [pick] = [a for a in types.actions() if a.text() == "Pup Retrieval"]
+        with qtbot.waitSignal(win.experiment_type_chosen) as sig:
+            pick.trigger()
+        assert sig.args == ["Pup Retrieval"]
+        assert inspector.isTabVisible(inspector.indexOf(inspector.retrieval))
+        assert win._export_retrieval_action.isVisible()
+        assert win._export_nest_action.isVisible()
+        assert types.title() == "Experiment type: Pup Retrieval"
+        types.aboutToShow.emit()
+        assert [a.text() for a in types.actions() if a.isChecked()] == ["Pup Retrieval"]
+
+    def test_the_pup_retrieval_type_says_what_it_shows(self, qtbot):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        [pick] = [a for a in win._type_menu.actions() if a.text() == "Pup Retrieval"]
+        assert pick.toolTip() == "Shows retrieval scoring"
+
+    def test_an_unclickable_pill_keeps_a_tooltip_set_elsewhere(self, qtbot):
+        from glider.gui.behavior.analysis_window import _ClickablePill
+
+        pill = _ClickablePill("x")
+        qtbot.addWidget(pill)
+        pill.setToolTip("set elsewhere")
+        pill.set_clickable(False)
+        assert pill.toolTip() == "set elsewhere"
+
+    def test_uncalibrated_pill_opens_scale(self, qtbot, tmp_path, monkeypatch):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        calls = []
+        monkeypatch.setattr(win, "_set_scale", lambda: calls.append("pill"))
+        [scale] = [a for a in win._setup_btn.menu().actions() if a.text() == "Scale…"]
+        # An ethogram has no setup to keep a scale in: nothing to click.
+        win.load(_session(tmp_path / "etho"))
+        assert win._scale_pill.text() == "Uncalibrated"
+        assert not scale.isEnabled()
+        qtbot.mouseClick(win._scale_pill, Qt.MouseButton.LeftButton)
+        assert calls == []
+        win.load_video(_pup_video(tmp_path / "pups"))
+        assert win._scale_pill.text() == "Uncalibrated · Set scale…"
+        qtbot.mouseClick(win._scale_pill, Qt.MouseButton.LeftButton)
+        scale.trigger()
+        assert calls == ["pill", "pill"]
+
+    def test_session_controls_wait_for_a_session(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        needs_a_session = (
+            win._setup_btn,
+            win._view_btn,
+            win._export_menu_btn,
+            win._session_info,
+        )
+        assert all(w.isHidden() for w in needs_a_session)
+        assert not win._open_btn.isHidden() and not win._tour_btn.isHidden()
+        win.load(_session(tmp_path / "v"))
+        assert not any(w.isHidden() for w in needs_a_session)
+
+    def test_view_menu_sets_trail_length(self, qtbot, monkeypatch):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        monkeypatch.setattr(
+            "glider.gui.behavior.analysis_window.QInputDialog.getDouble",
+            lambda *a, **k: (7.5, True),
+        )
+        [trail] = [a for a in win._view_btn.menu().actions() if a.text() == "Trail length…"]
+        trail.trigger()
+        assert win._trail_s.value() == pytest.approx(7.5)
+
+    def test_the_status_bar_holds_messages_only(self, qtbot):
+        from PyQt6.QtWidgets import QLabel
+
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        assert win.statusBar().findChildren(QLabel) == []
+
+    def test_tour_targets_point_at_the_new_menus(self, qtbot):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        targets = win.tour_targets()
+        assert targets["zones"] is win._setup_btn
+        assert targets["export"] is win._export_menu_btn
+
+
+class TestRareToolsInMenus:
+    """Overlays ▾ on the viewer, ⋯ on the timeline: the everyday controls stay out."""
+
+    def _win(self, qtbot, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            "glider.gui.behavior.analysis_window._settings",
+            lambda: QSettings(str(tmp_path / "s.ini"), QSettings.Format.IniFormat),
+        )
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.load(_session(tmp_path / "v"))
+        return win
+
+    def test_overlay_options_in_menu(self, qtbot, tmp_path, monkeypatch):
+        """The pairs and body-point choices that were right-click only."""
+        win = self._win(qtbot, tmp_path, monkeypatch)
+        t = win._transport
+        by_text = {a.text(): a for a in t.overlays_menu.actions()}
+        pairs, point = by_text["Distance pairs"].menu(), by_text["Measured from"].menu()
+        pairs.aboutToShow.emit()
+        n = len(win._view.keypoint_names)
+        assert len([a for a in pairs.actions() if a.isCheckable()]) == n * (n - 1) // 2
+        point.aboutToShow.emit()
+        texts = [a.text() for a in point.actions() if a.isCheckable()]
+        assert texts == ["Centroid (all keypoints)", *win._view.keypoint_names]
+        # Picking from the menu does what the right-click menu did.
+        [all_pairs] = [a for a in pairs.actions() if a.text() == "All pairs"]
+        all_pairs.trigger()
+        assert t.distances_on.isChecked()
+        assert len(win._canvas.pairs()) == n * (n - 1) // 2
+        # Opening it twice does not pile the entries up.
+        point.aboutToShow.emit()
+        assert len([a for a in point.actions() if a.isCheckable()]) == n + 1
+
+    def test_heatmap_from_the_overlays_menu(self, qtbot, tmp_path, monkeypatch):
+        win = self._win(qtbot, tmp_path, monkeypatch)
+        [heatmap] = [a for a in win._transport.overlays_menu.actions() if a.text() == "Heatmap"]
+        heatmap.trigger()
+        assert win._heatmap_on.isChecked()
+
+    def test_range_marker_from_the_more_menu(self, qtbot, tmp_path, monkeypatch):
+        win = self._win(qtbot, tmp_path, monkeypatch)
+        panel = win._timeline_panel
+        assert panel.range_marker_btn in panel.more_menu.actions()
+        panel.range_marker_btn.trigger()  # no In/Out yet: it says how to set one
+        assert "Set In and Out" in win.statusBar().currentMessage()
+
+    def test_the_timeline_toolbar_fits_at_1400(self, qtbot, tmp_path, monkeypatch):
+        from glider.gui.styles import get_desktop_stylesheet
+
+        win = self._win(qtbot, tmp_path, monkeypatch)
+        win.setStyleSheet(get_desktop_stylesheet())  # padding counts: measure it styled
+        win.resize(1400, 900)
+        win.show()
+        qtbot.waitExposed(win)
+        corner = win._timeline_panel.cornerWidget(Qt.Corner.TopRightCorner)
+        assert corner.sizeHint().width() <= 900
+        assert corner.width() >= corner.sizeHint().width(), "the toolbar is clipped"
+
+    def test_behavior_in_range_keeps_the_answer_in_view(self, qtbot, tmp_path, monkeypatch):
+        """Total and share fit the inspector; mean and median ride in the tooltip."""
+        win = self._win(qtbot, tmp_path, monkeypatch)
+        win._bar.set_selection(10, 250)
+        table = win._bouts
+        assert table.rowCount() > 0
+        assert [table.isColumnHidden(c) for c in range(6)] == [False] * 4 + [True] * 2
+        assert table.item(0, 0).toolTip().startswith("Mean bout ")
+
+
+class TestDeclutterTooltips:
+    def test_long_path_is_elided_with_full_path_in_tooltip(self, qtbot, tmp_path):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        win.resize(500, 400)
+        win.show()
+        long = tmp_path / ("d" * 40) / ("e" * 40) / ("f" * 40) / "ethogram.csv"
+        win._path_label.setText(str(long))
+        win._path_label.setToolTip(str(long))
+        win._path_label.resize(120, 20)
+        assert "…" in win._path_label.text()
+        assert win._path_label.text() != str(long)
+        assert win._path_label.toolTip() == str(long)
+
+    def test_scale_and_sessions_list_explain_themselves(self, qtbot):
+        win = AnalysisWindow()
+        qtbot.addWidget(win)
+        menu = win._setup_btn.menu()
+        [scale] = [a for a in menu.actions() if a.text() == "Scale…"]
+        assert scale.toolTip() == "Measures a pup video's scale"
+        assert menu.toolTipsVisible()
+        sessions = win._view_actions["sessions"]
+        assert "two or more" in sessions.toolTip()
+        assert win._view_btn.menu().toolTipsVisible()

@@ -1,6 +1,6 @@
 """Smoke tests for the top-level Behavior Analysis window.
 
-Just enough to prove the window builds its three tabs and can default
+Just enough to prove the window builds its step tabs and can default
 its project directory from config — the tab bodies (Annotate/Train/Apply)
 get their own focused tests once the window exists.
 """
@@ -20,6 +20,24 @@ def test_window_tabs_are_in_pipeline_order(qtbot, tmp_path):
     qtbot.addWidget(win)
     titles = [win.tabs.tabText(i) for i in range(win.tabs.count())]
     assert titles == ["Annotate", "Train", "Review", "Apply"]
+
+
+def test_step_strip_marks_done(qtbot, tmp_path):
+    """Numbered steps; a finished one shows a tick, and the title never changes."""
+    from glider.gui.behavior.window import BehaviorAnalysisWindow
+
+    win = BehaviorAnalysisWindow(project_dir=tmp_path)
+    qtbot.addWidget(win)
+    assert [win.step_badge(i).text() for i in range(4)] == ["1", "2", "3", "4"]
+
+    win.set_step_done(1, True)
+    assert win.step_badge(1).text() == "\u2713"
+    assert win.step_badge(1).property("state") == "done"
+    assert win.tabs.tabText(1) == "Train"
+
+    win.set_step_done(1, False)
+    assert win.step_badge(1).text() == "2"
+    assert win.step_badge(0).property("state") == "current"
 
 
 def test_window_defaults_project_dir_from_config(qtbot):
@@ -151,6 +169,7 @@ def test_switching_mode_hides_the_irrelevant_fields(qtbot):
     qtbot.addWidget(tab)
     tab._speed_group.setChecked(True)
     tab.show()
+    tab._options.show()  # the speed group lives in the Options popup
 
     tab._speed_mode.setCurrentIndex(tab._speed_mode.findData("absolute"))
     assert tab._freeze_cm_s.isVisible() is True
@@ -409,10 +428,10 @@ def test_advanced_button_is_lightgbm_only(qtbot):
 
     tab = TrainTab()
     qtbot.addWidget(tab)
-    tab._classifier_combo.setCurrentText("rf")
-    assert not tab._advanced_btn.isEnabled()
-    tab._classifier_combo.setCurrentText("lightgbm")
-    assert tab._advanced_btn.isEnabled()
+    tab._classifier_combo.setCurrentText("Random forest")
+    assert tab._advanced_btn.isHidden()
+    tab._classifier_combo.setCurrentText("LightGBM")
+    assert not tab._advanced_btn.isHidden()
 
 
 def test_untouched_knobs_send_nothing_to_train_model(qtbot):
@@ -421,7 +440,7 @@ def test_untouched_knobs_send_nothing_to_train_model(qtbot):
 
     tab = TrainTab()
     qtbot.addWidget(tab)
-    tab._classifier_combo.setCurrentText("lightgbm")
+    tab._classifier_combo.setCurrentText("LightGBM")
     assert tab._lgbm_options() == {}
 
 
@@ -431,7 +450,7 @@ def test_accepted_knobs_become_an_lgbm_reg(qtbot):
 
     tab = TrainTab()
     qtbot.addWidget(tab)
-    tab._classifier_combo.setCurrentText("lightgbm")
+    tab._classifier_combo.setCurrentText("LightGBM")
     tab._lgbm_advanced = {
         "n_estimators": 400,
         "learning_rate": 0.05,
@@ -464,7 +483,7 @@ def test_random_forest_run_never_carries_lgbm_knobs(qtbot):
     tab = TrainTab()
     qtbot.addWidget(tab)
     tab._lgbm_advanced = {"n_estimators": 400, "num_leaves": 63}
-    tab._classifier_combo.setCurrentText("rf")
+    tab._classifier_combo.setCurrentText("Random forest")
     assert tab._lgbm_options() == {}
 
 
@@ -491,7 +510,7 @@ def test_advanced_dialog_stores_values_on_accept(qtbot, monkeypatch):
 
     tab = win.TrainTab()
     qtbot.addWidget(tab)
-    tab._classifier_combo.setCurrentText("lightgbm")
+    tab._classifier_combo.setCurrentText("LightGBM")
     monkeypatch.setattr(win.LgbmAdvancedDialog, "exec", lambda self: 1)
     tab._on_advanced()
     assert tab._lgbm_advanced is not None
@@ -503,7 +522,7 @@ def test_advanced_dialog_discards_values_on_cancel(qtbot, monkeypatch):
 
     tab = win.TrainTab()
     qtbot.addWidget(tab)
-    tab._classifier_combo.setCurrentText("lightgbm")
+    tab._classifier_combo.setCurrentText("LightGBM")
     monkeypatch.setattr(win.LgbmAdvancedDialog, "exec", lambda self: 0)
     tab._on_advanced()
     assert tab._lgbm_advanced is None
@@ -638,7 +657,7 @@ def _saved_zones(tmp_path, stem, spans, behavior="walking"):
     return store
 
 
-def _launch_annotate(qtbot, tmp_path, monkeypatch, configure=None):
+def _launch_annotate(qtbot, tmp_path, monkeypatch, configure=None, review=False):
     """Drive _on_launch with the sampler and annotator stubbed out.
 
     ``configure(tab)`` runs after construction so a test can set the new
@@ -696,7 +715,7 @@ def _launch_annotate(qtbot, tmp_path, monkeypatch, configure=None):
     tab._videos_dir = tmp_path
     if configure is not None:
         configure(tab)
-    tab._on_launch()
+    tab._on_launch(review=review)
     captured["tab"] = tab
     return captured, warnings_shown
 
@@ -742,9 +761,7 @@ def test_review_mode_loads_every_saved_zone(qtbot, tmp_path, monkeypatch):
     _saved_zones(tmp_path, "session01", [(0, 10), (20, 30), (40, 50)])
     _saved_zones(tmp_path, "session02", [(5, 15), (25, 35)])
 
-    captured, warnings_shown = _launch_annotate(
-        qtbot, tmp_path, monkeypatch, configure=lambda t: t._review_check.setChecked(True)
-    )
+    captured, warnings_shown = _launch_annotate(qtbot, tmp_path, monkeypatch, review=True)
 
     assert warnings_shown == []
     # Sampling is skipped entirely in review mode.
@@ -764,9 +781,7 @@ def test_review_mode_says_so_when_nothing_is_labelled_yet(qtbot, tmp_path, monke
     """An empty review window looks identical to a broken one. Say which it is."""
     _pose_batch_output(tmp_path, "session01")
 
-    captured, warnings_shown = _launch_annotate(
-        qtbot, tmp_path, monkeypatch, configure=lambda t: t._review_check.setChecked(True)
-    )
+    captured, warnings_shown = _launch_annotate(qtbot, tmp_path, monkeypatch, review=True)
 
     assert "annotator_kwargs" not in captured
     assert len(warnings_shown) == 1
@@ -808,9 +823,7 @@ def test_review_mode_also_wires_up_the_render_more_button(qtbot, tmp_path, monke
     _pose_batch_output(tmp_path, "session01")
     _saved_zones(tmp_path, "session01", [(0, 10)])
 
-    captured, _ = _launch_annotate(
-        qtbot, tmp_path, monkeypatch, configure=lambda t: t._review_check.setChecked(True)
-    )
+    captured, _ = _launch_annotate(qtbot, tmp_path, monkeypatch, review=True)
 
     assert callable(captured["annotator_kwargs"]["clip_sampler"])
 
@@ -1645,7 +1658,7 @@ def test_the_new_knobs_stay_available_for_randomforest(qtbot, tmp_path, monkeypa
     unreachable with the RandomForest backend."""
 
     def pick_rf(tab):
-        tab._classifier_combo.setCurrentText("rf")
+        tab._classifier_combo.setCurrentText("Random forest")
 
     tab, options = _fit_options(qtbot, tmp_path, monkeypatch, configure=pick_rf)
     assert tab._window_spin.isEnabled()
@@ -1820,13 +1833,13 @@ def test_cross_validate_sends_the_training_sessions(qtbot, tmp_path, monkeypatch
 
 def test_cross_validate_defaults_to_five_folds(qtbot, tmp_path, monkeypatch):
     tab, captured, _ = _cv_options(qtbot, tmp_path, monkeypatch)
-    assert tab._folds_spin.value() == 5
+    assert tab._folds == 5
     assert captured["options"]["n_folds"] == 5
 
 
 def test_fold_count_is_configurable(qtbot, tmp_path, monkeypatch):
     _tab, captured, _ = _cv_options(
-        qtbot, tmp_path, monkeypatch, configure=lambda t: t._folds_spin.setValue(10)
+        qtbot, tmp_path, monkeypatch, configure=lambda t: setattr(t, "_folds", 10)
     )
     assert captured["options"]["n_folds"] == 10
 
@@ -1934,7 +1947,7 @@ def test_measure_only_by_default_passes_no_output(qtbot, tmp_path, monkeypatch):
 
 def test_ticking_also_fit_passes_the_output_path(qtbot, tmp_path, monkeypatch):
     def configure(tab):
-        tab._cv_fit_check.setChecked(True)
+        tab._cv_then_fit = True
         tab._output_path = tmp_path / "model.pkl"
 
     _tab, captured, _ = _cv_options(qtbot, tmp_path, monkeypatch, configure=configure)
@@ -1944,7 +1957,7 @@ def test_ticking_also_fit_passes_the_output_path(qtbot, tmp_path, monkeypatch):
 def test_also_fit_without_an_output_file_is_refused(qtbot, tmp_path, monkeypatch):
     """Fitting with nowhere to save it would throw the model away."""
     _tab, captured, warned = _cv_options(
-        qtbot, tmp_path, monkeypatch, configure=lambda t: t._cv_fit_check.setChecked(True)
+        qtbot, tmp_path, monkeypatch, configure=lambda t: setattr(t, "_cv_then_fit", True)
     )
     assert "options" not in captured
     assert warned and "output file" in warned[0].lower()
@@ -1983,21 +1996,19 @@ def test_the_combined_worker_reaches_the_combined_pipeline_call(tmp_path, monkey
     assert seen.get("saved") == out
 
 
-def test_a_failed_run_re_enables_both_buttons(qtbot, tmp_path, monkeypatch):
-    """_on_train_failed is shared, so it must revive the cross-validate button
-    too — otherwise one failure kills the action for the rest of the session."""
+def test_a_failed_run_re_enables_the_fit_menu(qtbot, tmp_path, monkeypatch):
+    """_on_train_failed is shared, so it must revive the Fit button, whose menu
+    holds Cross-validate — otherwise one failure kills both for the session."""
     from glider.gui.behavior import window as win_mod
 
     monkeypatch.setattr(win_mod.QMessageBox, "critical", lambda *a, **k: None)
     tab = win_mod.TrainTab()
     qtbot.addWidget(tab)
     tab._fit_btn.setEnabled(False)
-    tab._cv_btn.setEnabled(False)
 
     tab._on_train_failed("boom")
 
     assert tab._fit_btn.isEnabled()
-    assert tab._cv_btn.isEnabled()
 
 
 def test_cross_validate_needs_no_output_file(qtbot, tmp_path, monkeypatch):
@@ -2086,9 +2097,7 @@ def test_review_mode_writes_no_queue(qtbot, tmp_path, monkeypatch):
     _pose_batch_output(tmp_path, "session01")
     _saved_zones(tmp_path, "session01", [(0, 10)])
 
-    _launch_annotate(
-        qtbot, tmp_path, monkeypatch, configure=lambda t: t._review_check.setChecked(True)
-    )
+    _launch_annotate(qtbot, tmp_path, monkeypatch, review=True)
 
     assert not _queue_file(tmp_path).exists()
 
@@ -2114,29 +2123,25 @@ def test_an_unwritable_folder_does_not_stop_labelling(qtbot, tmp_path, monkeypat
 # The queue is cached now, but nothing said so: a launch gave no sign whether
 # it had sampled fresh clips or resumed a saved queue, nor how much of it was
 # already done. And the empty-review dialog still told the operator that
-# unticking Review would "sample fresh clips", which stopped being true the
+# leaving review mode would "sample fresh clips", which stopped being true the
 # moment the queue started persisting.
 # --------------------------------------------------------------------------
 
 
 def test_the_empty_review_message_does_not_promise_fresh_clips(qtbot, tmp_path, monkeypatch):
-    """Unticking Review resumes the cached queue; it does not resample."""
+    """Leaving review mode resumes the cached queue; it does not resample."""
     _pose_batch_output(tmp_path, "session01")
 
-    _captured, warnings_shown = _launch_annotate(
-        qtbot, tmp_path, monkeypatch, configure=lambda t: t._review_check.setChecked(True)
-    )
+    _captured, warnings_shown = _launch_annotate(qtbot, tmp_path, monkeypatch, review=True)
 
     assert len(warnings_shown) == 1
     assert "sample fresh clips" not in warnings_shown[0]
 
 
-def test_the_empty_review_message_explains_what_unticking_does(qtbot, tmp_path, monkeypatch):
+def test_the_empty_review_message_explains_what_resume_does(qtbot, tmp_path, monkeypatch):
     _pose_batch_output(tmp_path, "session01")
 
-    _captured, warnings_shown = _launch_annotate(
-        qtbot, tmp_path, monkeypatch, configure=lambda t: t._review_check.setChecked(True)
-    )
+    _captured, warnings_shown = _launch_annotate(qtbot, tmp_path, monkeypatch, review=True)
 
     lowered = warnings_shown[0].lower()
     assert "resume" in lowered or "resumed" in lowered
@@ -2192,9 +2197,7 @@ def test_review_mode_reports_the_zones_it_loaded(qtbot, tmp_path, monkeypatch):
     _pose_batch_output(tmp_path, "session01")
     _saved_zones(tmp_path, "session01", [(0, 10), (20, 30), (40, 50)])
 
-    captured, _ = _launch_annotate(
-        qtbot, tmp_path, monkeypatch, configure=lambda t: t._review_check.setChecked(True)
-    )
+    captured, _ = _launch_annotate(qtbot, tmp_path, monkeypatch, review=True)
 
     assert "3" in captured["tab"]._queue_status
     assert "review" in captured["tab"]._queue_status.lower()
@@ -2669,3 +2672,267 @@ def test_the_cohort_scan_ignores_csvs_that_are_not_poses(tmp_path):
     (tmp_path / "aDLC_exp-7.csv").write_text("scorer\n")
     (tmp_path / "ethogram_raw.csv").write_text("frame,behavior\n")
     assert [p.name for p in _unique_pose_csvs(tmp_path)] == ["aDLC_exp-7.csv"]
+
+
+# --------------------------------------------------------------------------
+# Annotate step: one primary button, rare settings behind Options
+# --------------------------------------------------------------------------
+
+
+def test_primary_button_offers_resume_when_labels_exist(qtbot, tmp_path, monkeypatch):
+    from glider.gui.behavior import window as win_mod
+
+    fresh = tmp_path / "fresh"
+    labelled = tmp_path / "labelled"
+    fresh.mkdir()
+    labelled.mkdir()
+    (labelled / "session01_annotations.csv").write_text("behavior,start_frame,end_frame\n")
+
+    tab = win_mod.AnnotateTab(tmp_path / "project")
+    qtbot.addWidget(tab)
+    footer = tab._footer
+    menu_texts = lambda: [a.text() for a in footer.menu.actions()]  # noqa: E731
+
+    tab._set_videos_dir(fresh)
+    assert footer.primary.text() == "Label Clips"
+    assert menu_texts() == ["Resume Labelling", "Review saved annotations"]
+
+    tab._set_videos_dir(labelled)
+    assert footer.primary.text() == "Resume Labelling"
+    assert menu_texts() == ["Label Clips", "Review saved annotations"]
+
+    # The pose folder is where annotations live, so it decides too.
+    tab._set_videos_dir(fresh)
+    assert footer.primary.text() == "Label Clips"
+    tab._set_poses_dir(labelled)
+    assert footer.primary.text() == "Resume Labelling"
+
+    calls: list[str] = []
+    monkeypatch.setattr(tab, "_on_resume", lambda: calls.append("resume"))
+    monkeypatch.setattr(tab, "_on_launch", lambda review=False: calls.append(f"launch:{review}"))
+    footer.primary.click()
+    footer.menu.actions()[0].trigger()
+    footer.menu.actions()[1].trigger()
+    assert calls == ["resume", "launch:False", "launch:True"]
+
+
+def test_annotate_footer_names_the_missing_folder(qtbot, tmp_path):
+    from glider.gui.behavior import window as win_mod
+
+    tab = win_mod.AnnotateTab(tmp_path)
+    qtbot.addWidget(tab)
+    assert "videos folder" in tab._footer.message.text().lower()
+
+    _pose_batch_output(tmp_path, "a")
+    tab._set_videos_dir(tmp_path)
+    assert "1 video" in tab._footer.message.text()
+
+
+def test_annotate_footer_names_a_missing_pose_set(qtbot, tmp_path):
+    """Videos with no pose CSVs block labelling, so the footer says so up front."""
+    from glider.gui.behavior import window as win_mod
+
+    tab = win_mod.AnnotateTab(tmp_path)
+    qtbot.addWidget(tab)
+    (tmp_path / "a.mp4").touch()
+    tab._set_videos_dir(tmp_path)
+    message = tab._footer.message.text()
+    assert "No pose CSVs found for these videos" in message
+    assert "Batch Pose Tracking" in message
+    assert "Pose CSV folder" in message
+
+
+def test_annotate_options_hold_rare_settings(qtbot, tmp_path):
+    from glider.gui.behavior import window as win_mod
+
+    tab = win_mod.AnnotateTab(tmp_path)
+    qtbot.addWidget(tab)
+    popup = tab._options
+
+    for rare in (tab._skip_labelled_check, tab._speed_check, tab._cohort_label):
+        assert popup.isAncestorOf(rare)
+    # Clips to sample is what Label Clips uses, so it stays on the step.
+    assert not popup.isAncestorOf(tab._clip_count)
+    assert tab.isAncestorOf(tab._clip_count)
+
+    assert not popup.isVisible()
+    tab._footer.options_button.click()
+    assert popup.isVisible()
+    tab._footer.options_button.click()
+    assert not popup.isVisible()
+
+    # Hidden state is named under the inputs.
+    assert tab._summary.text() == ""
+    tab._skip_labelled_check.setChecked(True)
+    tab._speed_check.setChecked(False)
+    assert "skip labelled" in tab._summary.text().lower()
+    assert "speed trace off" in tab._summary.text().lower()
+
+
+# --------------------------------------------------------------------------
+# Train step: sessions and output on the step, tuning and CV tucked away
+# --------------------------------------------------------------------------
+
+
+def test_train_options_hold_classifier_controls(qtbot):
+    from glider.gui.behavior.window import TrainTab
+
+    tab = TrainTab()
+    qtbot.addWidget(tab)
+    popup = tab._options
+    for control in (
+        tab._classifier_combo,
+        tab._advanced_btn,
+        tab._background_check,
+        tab._mirror_check,
+        tab._window_spin,
+        tab._class_weight_combo,
+        tab._test_split_spin,
+        tab._seed_spin,
+        tab._fps_spin,
+        tab._embedding_combo,
+        tab._traj_check,
+        tab._motion_check,
+        tab._freq_check,
+    ):
+        assert popup.isAncestorOf(control)
+    # What a fit needs stays on the step.
+    for required in (tab._sessions_list, tab._output_label, tab._results):
+        assert not popup.isAncestorOf(required)
+        assert tab.isAncestorOf(required)
+    assert tab._footer.primary is tab._fit_btn
+    assert tab._fit_btn.text() == "Fit Model"
+
+    # LightGBM settings… is hidden, not greyed, for a Random forest.
+    tab._classifier_combo.setCurrentText("Random forest")
+    assert tab._advanced_btn.isHidden()
+    tab._classifier_combo.setCurrentText("LightGBM")
+    assert not tab._advanced_btn.isHidden()
+
+
+def test_kind_labels_are_readable(qtbot):
+    from glider.gui.behavior.window import TrainTab
+
+    tab = TrainTab()
+    qtbot.addWidget(tab)
+    combo = tab._classifier_combo
+    assert [combo.itemText(i) for i in range(combo.count())] == ["Random forest", "LightGBM"]
+    combo.setCurrentText("Random forest")
+    assert tab._shared_options()["classifier_type"] == "rf"
+    combo.setCurrentText("LightGBM")
+    assert tab._shared_options()["classifier_type"] == "lightgbm"
+
+
+def test_summary_names_non_default_options(qtbot):
+    """A setting changed in a closed popup still shows under the inputs."""
+    from glider.gui.behavior.window import TrainTab
+
+    tab = TrainTab()
+    qtbot.addWidget(tab)
+    text = tab._summary.text
+    assert text().startswith("Random forest · 1 s window at 30 fps")
+    assert "mirror" not in text().lower()
+
+    tab._classifier_combo.setCurrentText("LightGBM")
+    tab._window_spin.setValue(18)
+    tab._mirror_check.setChecked(True)
+    tab._class_weight_combo.setCurrentIndex(tab._class_weight_combo.findData("balanced"))
+    tab._fps_spin.setValue(25.0)
+    lowered = text().lower()
+    assert text().startswith("LightGBM · 0.72 s window")
+    assert "mirror augment on" in lowered
+    assert "balanced" in lowered
+    assert "25 fps" in lowered
+
+    tab._lgbm_advanced = {"n_estimators": 400}
+    tab._update_summary()
+    assert "custom lightgbm settings" in text().lower()
+
+
+def test_holdout_reveals_when_used(qtbot, tmp_path, monkeypatch):
+    poses = [_session_files(tmp_path, f"h{i}") for i in range(2)]
+    tab, _ = _train_tab(qtbot, monkeypatch, poses)
+
+    assert tab._holdout_card.isHidden()
+    assert "▸" in tab._holdout_toggle.text()
+    tab._holdout_toggle.click()
+    assert not tab._holdout_card.isHidden()
+    assert "▾" in tab._holdout_toggle.text()
+    tab._holdout_toggle.click()
+    assert tab._holdout_card.isHidden()
+
+    # Sessions in the holdout list are never hidden away.
+    tab._on_add_holdout()
+    assert not tab._holdout_card.isHidden()
+    assert tab._holdout_toggle.isChecked()
+
+
+def test_fit_menu_cross_validates(qtbot, tmp_path, monkeypatch):
+    """Both CV menu items ask the folds (defaulting to the last value) and run CV."""
+    from glider.gui.behavior import window as win_mod
+
+    tab = win_mod.TrainTab()
+    qtbot.addWidget(tab)
+    tab._folds = 7
+    asked: list[int] = []
+
+    def fake_get_int(_parent, _title, _label, value, *_a, **_k):
+        asked.append(value)
+        return 4, True
+
+    monkeypatch.setattr(win_mod.QInputDialog, "getInt", staticmethod(fake_get_int))
+    runs: list[tuple[int, bool]] = []
+    monkeypatch.setattr(
+        tab, "_on_cross_validate", lambda: runs.append((tab._folds, tab._cv_then_fit))
+    )
+    fits: list[bool] = []
+    monkeypatch.setattr(tab, "_on_fit", lambda: fits.append(True))
+
+    actions = {a.text(): a for a in tab._footer.menu.actions()}
+    assert list(actions) == [
+        "Fit model",
+        "Cross-validate (k folds)…",
+        "Cross-validate, then fit…",
+    ]
+    actions["Cross-validate (k folds)…"].trigger()
+    actions["Cross-validate, then fit…"].trigger()
+    assert asked == [7, 4]
+    assert runs == [(4, False), (4, True)]
+
+    actions["Fit model"].trigger()
+    tab._fit_btn.click()
+    assert fits == [True, True]
+
+    # Cancelling the folds prompt runs nothing.
+    monkeypatch.setattr(win_mod.QInputDialog, "getInt", staticmethod(lambda *a, **k: (0, False)))
+    actions["Cross-validate, then fit…"].trigger()
+    assert len(runs) == 2
+
+
+def test_train_is_done_only_when_a_model_is_saved(qtbot, tmp_path):
+    from glider.gui.behavior.window import BehaviorAnalysisWindow
+
+    win = BehaviorAnalysisWindow(project_dir=tmp_path)
+    qtbot.addWidget(win)
+    tab = win.train_tab
+    tab._saving_to = None
+    tab._on_cv_finished({"mean_macro_f1": 0.5, "n_folds": 2, "folds": []})
+    assert win.step_badge(1).text() == "2"
+
+    tab._saving_to = tmp_path / "m.pkl"
+    tab._on_train_finished({})
+    assert win.step_badge(1).text() == "✓"
+
+
+def test_options_popup_hides_when_the_step_changes(qtbot, tmp_path):
+    from glider.gui.behavior.window import BehaviorAnalysisWindow
+
+    win = BehaviorAnalysisWindow(project_dir=tmp_path)
+    qtbot.addWidget(win)
+    win.show()
+    win.tabs.setCurrentIndex(1)
+    win.train_tab._footer.options_button.click()
+    assert win.train_tab._options.isVisible()
+
+    win.tabs.setCurrentIndex(0)
+    assert not win.train_tab._options.isVisible()

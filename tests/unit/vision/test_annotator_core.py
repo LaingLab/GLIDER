@@ -34,6 +34,7 @@ from glider.vision.training.project import (
     StudioProjectError,
     flip_pairs_from_names,
 )
+from glider.vision.training.splits import leaky_videos
 
 MOUSE = KeypointSchema.default_mouse().names
 
@@ -278,9 +279,11 @@ def test_export_writes_lists_and_yaml(project, tmp_path):
     _label_all(project, a + b)
     project.frames[0].skipped = True
     result = export_dataset(project)
-    assert result.split_by_video
-    listed = (project.folder / "train.txt").read_text().splitlines()
-    listed += (project.folder / "val.txt").read_text().splitlines()
+    assert result.split_by_video == (not leaky_videos(project))
+    listed = []
+    for name in ("train.txt", "val.txt", "test.txt"):
+        if (project.folder / name).exists():
+            listed += (project.folder / name).read_text().splitlines()
     assert len(listed) == 5  # the skipped frame is left out
     text = result.data_yaml.read_text()
     assert "kpt_shape: [7, 3]" in text
@@ -298,3 +301,59 @@ def test_ultralytics_accepts_the_exported_dataset(project, tmp_path):
     assert data["kpt_shape"] == [7, 3]
     assert data["names"] == {0: "animal"}
     assert data["kpt_names"][0] == MOUSE
+
+
+def _three_videos(project, tmp_path):
+    out = {}
+    for v, split in (("a", "train"), ("b", "val"), ("c", "test")):
+        out[v] = extract_frames(project, _clip(tmp_path / f"{v}.avi"), 3, "uniform")
+        for f in out[v]:
+            f.split = split
+    _label_all(project, [f for fs in out.values() for f in fs])
+    return out
+
+
+def _listed(project, name):
+    return {Path(p).stem for p in (project.folder / name).read_text().splitlines()}
+
+
+def test_export_uses_stored_splits(project, tmp_path):
+    out = _three_videos(project, tmp_path)
+    result = export_dataset(project)
+    for name, v in (("train.txt", "a"), ("val.txt", "b"), ("test.txt", "c")):
+        assert _listed(project, name) == {f.name for f in out[v]}
+    assert "test: test.txt" in result.data_yaml.read_text()
+    assert len(result.test) == 3
+    assert result.split_by_video
+
+
+def test_export_omits_test_when_empty(project, tmp_path):
+    out = _three_videos(project, tmp_path)
+    export_dataset(project)
+    for f in out["c"]:
+        f.split = "train"
+    result = export_dataset(project)
+    assert not (project.folder / "test.txt").exists()
+    assert "test:" not in result.data_yaml.read_text()
+    assert result.test == []
+
+
+def test_export_refuses_empty_val(project, tmp_path):
+    out = _three_videos(project, tmp_path)
+    for f in out["b"]:
+        project.label_path(f).unlink()
+    with pytest.raises(DatasetError, match="validation"):
+        export_dataset(project)
+
+
+def test_export_migrates_an_old_project(project, tmp_path):
+    a = extract_frames(project, _clip(tmp_path / "a.avi"), 3, "uniform")
+    b = extract_frames(project, _clip(tmp_path / "b.avi"), 3, "uniform")
+    _label_all(project, a + b)
+    for f in project.frames:
+        f.split = ""
+    export_dataset(project)
+    assert all(f.split for f in project.frames)
+    assert all(
+        f["split"] for f in json.loads((project.folder / "studio.json").read_text())["frames"]
+    )
