@@ -668,7 +668,7 @@ QTabWidget#StepTabs > QTabBar::tab,
 QTabWidget#StepTabs > QTabBar::tab:selected,
 QTabWidget#StepTabs > QTabBar::tab:hover {
     background-color: transparent;
-    border-radius: 0px;
+    border-radius: 0;
     margin: 0px;
 }
 
