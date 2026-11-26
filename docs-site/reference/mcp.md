@@ -21,8 +21,6 @@ use (for example `--extra vision`). This puts `glider-mcp` in the clone's
 virtual environment: `.venv/bin/glider-mcp` on macOS/Linux,
 `.venv\Scripts\glider-mcp.exe` on Windows.
 
-The installer builds do not include `glider-mcp` yet.
-
 ## Connect an agent
 
 Claude Code:

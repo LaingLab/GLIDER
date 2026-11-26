@@ -1,54 +1,20 @@
 # Installation
 
-There are two ways to install GLIDER:
+GLIDER installs from source with [uv](https://docs.astral.sh/uv/), on macOS,
+Windows, Linux and the Raspberry Pi. The [one-command installer](#one-command)
+does it all for you, and running it again updates GLIDER. On a Pi you can
+instead flash the [prebuilt SD-card image](../runner/pi-kiosk.md).
 
-- **Prebuilt app** — the easiest path for most people. Download an installer and
-  run it. Best if you just want to *use* GLIDER.
-- **From source** — installs the Python project with [uv](https://docs.astral.sh/uv/).
-  Best if you want the very latest changes, are on a Raspberry Pi, or plan to
-  develop.
+!!! note "No more macOS and Windows installers"
+    GLIDER no longer publishes `.dmg` or Windows installer builds. If you have
+    one, it keeps working, but it won't get new versions: install from source
+    with the one command below to stay up to date.
 
 !!! info "Supported Python"
-    GLIDER runs on **Python 3.12**, the version CI tests and the prebuilt apps
-    ship. If you install from source with `uv`, Python 3.12 is installed for
-    you — you don't need to manage Python yourself. The Raspberry Pi is the
+    GLIDER runs on **Python 3.12**, the version CI tests. `uv` installs
+    Python 3.12 for you, so you don't need to manage Python yourself. The Raspberry Pi is the
     exception: it uses the OS's own Python (3.11 on Bookworm) so it can see the
     system's PyQt6.
-
-## Prebuilt app
-
-Prebuilt installers are published on the project's
-[**GitHub Releases**](https://github.com/LaingLab/glider/releases) page.
-
-=== "macOS"
-
-    1. Download the `.dmg` for your Mac from the Releases page. There is one per
-       architecture — **Apple Silicon** (`arm64`) and **Intel** (`x86_64`).
-       If you're unsure, choose Apple Silicon for M1/M2/M3/M4 Macs.
-    2. Open the `.dmg` and drag **GLIDER** into your **Applications** folder.
-    3. Launch it from Applications.
-
-    !!! tip "“GLIDER can't be opened” on first launch"
-        Because the app isn't notarized, macOS may block the first launch.
-        Right-click the app → **Open**, then confirm. You only need to do this
-        once.
-
-=== "Windows"
-
-    1. Download the Windows build from the Releases page.
-    2. Run the executable.
-
-    !!! note "FFmpeg for recording"
-        To record video you also need FFmpeg — see [Recording prerequisites](#recording-prerequisites-ffmpeg)
-        below.
-
-=== "Raspberry Pi"
-
-    For a Pi, the easiest option is the **prebuilt SD-card image**, which boots
-    straight into GLIDER's touchscreen [Runner](../runner/index.md). See
-    [Raspberry Pi Kiosk](../runner/pi-kiosk.md) for flashing and setup. To
-    install onto an existing Pi instead, use the [from-source](#from-source)
-    steps.
 
 ## From source
 
@@ -203,13 +169,6 @@ Video recording relies on **FFmpeg**. Install it once:
     ```
 
 ## Updating
-
-=== "Prebuilt app"
-
-    Download the newer installer from the
-    [Releases](https://github.com/LaingLab/glider/releases) page and reinstall.
-    GLIDER also checks for updates and will let you know when a new version is
-    available (**Help → Check for Updates…**).
 
 === "From source"
 
