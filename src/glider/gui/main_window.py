@@ -1724,6 +1724,7 @@ class MainWindow(QMainWindow):
         )
         camera_panel.rehearsal_ended.connect(lambda: self._run_async(self._end_rehearsal_async()))
         self.state_changed.connect(camera_panel.on_experiment_state)
+        self.session_changed.connect(camera_panel.sync_identity_settings)
         camera_panel.set_video_recorder(self._core.video_recorder)
         camera_panel.set_multi_video_recorder(self._core.multi_video_recorder)
         camera_panel.set_tracking_logger(self._core.tracking_logger)
@@ -3801,6 +3802,7 @@ class MainWindow(QMainWindow):
             parent=self,
             view_manager=self._view_manager,
             camera_manager=self._core.camera_manager,
+            class_names=self._core.cv_processor.class_names,
         )
 
         dialog.calibration_requested.connect(self._on_camera_calibration)
@@ -3812,6 +3814,8 @@ class MainWindow(QMainWindow):
             cv_settings = dialog.get_cv_settings()
             try:
                 self._core.cv_processor.update_settings(cv_settings)
+                if self._camera_panel is not None:
+                    self._camera_panel.sync_identity_settings()
             except Exception as exc:
                 # A pose model that will not load raises its own error, and
                 # GLIDER installs no excepthook: escaping this slot aborted the
@@ -4163,7 +4167,8 @@ class MainWindow(QMainWindow):
             bool(self._core.data_recorder.is_recording)
             and getattr(self, "_last_session_state", None) == "RUNNING"
         )
-        self._dashboard_view.set_health(fps, dropped, recording)
+        lagging = bool(self._camera_panel is not None and self._camera_panel._cv_lagging)
+        self._dashboard_view.set_health(fps, dropped, recording, lagging)
 
     def _run_base_dir(self) -> Path:
         from glider.first_run import default_data_dir
@@ -4248,9 +4253,14 @@ class MainWindow(QMainWindow):
             return
         if self._core.state.name not in ("IDLE", "READY"):
             return  # already live: must not make a folder or move the recorders
-        missing = compute_readiness(self._core).missing_field
-        if missing:
-            self._notify_user("Missing details", f"Fill in {missing} to start.", level="warning")
+        readiness = compute_readiness(self._core)
+        if readiness.missing_field:
+            self._notify_user(
+                "Missing details", f"Fill in {readiness.missing_field} to start.", level="warning"
+            )
+            return
+        if readiness.identity_message:
+            self._notify_user("Animals", readiness.identity_message, level="warning")
             return
         folder = None
         try:

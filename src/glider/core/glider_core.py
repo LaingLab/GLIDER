@@ -1154,6 +1154,7 @@ class GliderCore:
                 # here rather than at the settings dialog so it holds however
                 # the settings arrived — dialog, .glider load, or default.
                 self._tracking_logger.set_keypoint_names(self._cv_processor.settings.keypoint_names)
+                self._tracking_logger.set_identity_columns(self._cv_processor.identity_active)
                 tracking_path = await self._tracking_logger.start(
                     experiment_name, session=self._session
                 )
@@ -1284,6 +1285,7 @@ class GliderCore:
 
         # Stop video recording and collect all video paths
         video_paths: list[Path] = []
+        single_video: Path | None = None
 
         # Not gated on is_recording: that is False while PAUSED (and after a
         # writer error), which used to leave a paused-then-stopped run's video
@@ -1304,6 +1306,7 @@ class GliderCore:
             if video_path:
                 logger.info(f"Video saved to: {video_path}")
                 video_paths.append(video_path)
+                single_video = Path(video_path)
                 # Check for annotated video
                 annotated = self._video_recorder.annotated_file_path
                 if annotated and annotated.exists():
@@ -1348,8 +1351,37 @@ class GliderCore:
                     flow_duration_s=self.last_flow_duration_s
                 )
                 logger.info(f"Tracking data saved to: {tracking_path}")
+                await self._export_identity(tracking_path, single_video)
             except Exception as e:
                 logger.error(f"Failed to stop tracking logger: {e}")
+
+    async def _export_identity(self, tracking_path: Path | None, video: Path | None) -> None:
+        """Lay a live identity run out as Batch Pose files beside its video.
+
+        Runs in a worker thread (it reads whole CSVs); never raises.
+        """
+        cv = self._cv_processor
+        rec = self._video_recorder
+        kp_path = self._tracking_logger.keypoints_file_path
+        frame_ts = list(rec.frame_timestamps)
+        if not (cv.identity_active and tracking_path and kp_path and video and video.exists()):
+            return
+        if not frame_ts:  # no frame was ever written
+            return
+        from glider.vision import identity_export
+
+        s = cv.settings
+        await asyncio.to_thread(
+            identity_export.export_live_identity,
+            tracking_path,
+            kp_path,
+            video,
+            Path(s.model_path or "model"),
+            [a["name"] for a in s.animals],
+            s.keypoint_names,
+            rec.fps,
+            frame_ts,
+        )
 
     async def _set_all_devices_low(self) -> None:
         """Set all output devices to LOW/off state for safety.

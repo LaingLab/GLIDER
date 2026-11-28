@@ -187,3 +187,24 @@ def test_start_while_paused_resumes_without_a_new_folder(window, tmp_path):
     window._core.resume_experiment.assert_awaited_once()
     window._core.start_experiment.assert_not_called()
     assert not (tmp_path / "oft").exists()
+
+
+def test_start_refused_until_the_animals_are_named(window, tmp_path):
+    """F5 and Run > Start skip the Start button's gating, so check again."""
+    from types import SimpleNamespace
+
+    window._core._cv_processor = SimpleNamespace(
+        settings=SimpleNamespace(enabled=True, identity_mode="continuity"),
+        identity_unavailable_reason=None,
+        identity_ready=False,
+    )
+    started, notes = [], []
+
+    async def start():
+        started.append(True)
+
+    window._core.start_experiment = start
+    window._notify_user = lambda *a, **k: notes.append(a)
+    _start(window)
+    assert started == []
+    assert notes == [("Animals", "Name the animals on the camera view")]

@@ -313,6 +313,10 @@ class ZoneState:
     occupied: bool = False
     object_count: int = 0
     object_ids: set[int] = field(default_factory=set)
+    # Named animals whose position is in the zone, hidden ones at their frozen spot.
+    animals: set[str] = field(default_factory=set)
+    # Named animals visible this frame (the same for every zone).
+    visible_animals: frozenset[str] = frozenset()
 
     # Event flags (reset each frame)
     entered: bool = False  # Object entered this frame
@@ -511,8 +515,20 @@ class ZoneTracker:
             zone.id: set() for zone in self._zone_config.zones
         }
 
+        current_zone_animals: dict[str, set[str]] = {
+            zone.id: set() for zone in self._zone_config.zones
+        }
+        visible_animals = frozenset(
+            a
+            for o in tracked_objects
+            if (a := getattr(o, "animal", None)) and getattr(o, "visible", True)
+        )
+
         # Check each tracked object against each zone
         for obj in tracked_objects:
+            # A named animal never observed yet has no position: in no zone.
+            if not getattr(obj, "visible", True) and not getattr(obj, "age", 1):
+                continue
             # Get object center
             if hasattr(obj, "centroid"):
                 cx, cy = obj.centroid
@@ -529,6 +545,8 @@ class ZoneTracker:
             for zone in self._zone_config.zones:
                 if zone.contains_point_pixels(int(cx), int(cy), frame_width, frame_height):
                     current_zone_objects[zone.id].add(track_id)
+                    if animal := getattr(obj, "animal", None):
+                        current_zone_animals[zone.id].add(animal)
 
         # Update zone states with enter/exit events
         for zone in self._zone_config.zones:
@@ -543,6 +561,8 @@ class ZoneTracker:
             # Update state
             state = self._zone_states[zone_id]
             state.object_ids = current_objects.copy()
+            state.animals = current_zone_animals[zone_id]
+            state.visible_animals = visible_animals
             state.object_count = len(current_objects)
             state.occupied = len(current_objects) > 0
             state.entered = len(entered_objects) > 0

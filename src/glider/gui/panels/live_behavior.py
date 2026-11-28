@@ -39,6 +39,7 @@ from glider.analysis.behavior.classify.pipeline import (
     _unstreamable_feature_families,
 )
 from glider.analysis.behavior.sequence import SequenceModel
+from glider.core.live_signals import BehaviorEvent
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +72,59 @@ def model_keypoint_count(model) -> int:
     return sum(1 for base in bases if base.startswith("speed_"))
 
 
+def _check_model(model, names: list[str]) -> None:
+    """Reject models the live path can't serve, or names that don't fit them."""
+    if isinstance(model, SequenceModel):
+        raise UnsupportedModelError(
+            "CNN sequence models aren't supported by the live tabular "
+            "classifier; use the sequence live path instead."
+        )
+    unstreamable = _unstreamable_feature_families(model.feature_names)
+    if unstreamable:
+        raise UnsupportedModelError(
+            "this behavior model needs features the live path can't compute "
+            f"in real time: {unstreamable}. Train a pose-only (or "
+            "--freq-features) model for live inference."
+        )
+
+    model_k = model_keypoint_count(model)
+    if len(names) != model_k:
+        raise KeypointMismatchError(
+            f"entered {len(names)} keypoint names but the model expects "
+            f"{model_k} (distinct speed_* features)."
+        )
+
+    # Names agreeing in *count* is not enough. With FeatureSpec.auto_angles
+    # the angle columns are named after the keypoints at given indices, so a
+    # re-ordering yields columns that never appear: they arrive as NaN,
+    # every prediction comes back blank, and nothing raises.
+    expected = expected_keypoint_order(model)
+    if expected and names != expected:
+        raise KeypointMismatchError(
+            "keypoint names are in a different order than the behavior "
+            f"model was trained on.\n  model:    {expected}\n"
+            f"  provided: {names}"
+        )
+
+
+def _stream(model, names: list[str]):
+    """A fresh (extractor, rolling buffer) pair for one keypoint stream."""
+    per_frame, spectral = derive_stream_columns(model)
+    return (
+        StreamingFeatureExtractor(model.spec, names, model.fps),
+        SlidingFeatureBuffer(per_frame, model.window, model.stats, spectral),
+    )
+
+
+def _push(model, ext, buf, kps) -> str:
+    row = ext.push(kps)
+    if row is not None:
+        buf.push_features(row)
+    if buf.is_full():
+        return model.predict_one(pd.Series(buf.rolling_dict()))
+    return ""
+
+
 class LiveBehaviorClassifier:
     """Compose YOLO + a trained BehaviorModel into ``classify_frame``.
 
@@ -89,32 +143,13 @@ class LiveBehaviorClassifier:
     """
 
     def __init__(self, model, backend, conf_threshold: float = 0.25):
-        if isinstance(model, SequenceModel):
-            raise UnsupportedModelError(
-                "CNN sequence models aren't supported by the live tabular "
-                "classifier; use the sequence live path instead."
-            )
-        unstreamable = _unstreamable_feature_families(model.feature_names)
-        if unstreamable:
-            raise UnsupportedModelError(
-                "this behavior model needs features the live path can't compute "
-                f"in real time: {unstreamable}. Train a pose-only (or "
-                "--freq-features) model for live inference."
-            )
-
         # The backend owns the names: for DeepLabCut and SLEAP they come from
         # the model's own config, so accepting them separately would let two
         # sources of truth disagree about the order that matters.
         names = list(backend.keypoint_names)
+        _check_model(model, names)
 
         model_k = model_keypoint_count(model)
-        entered_k = len(names)
-        if entered_k != model_k:
-            raise KeypointMismatchError(
-                f"entered {entered_k} keypoint names but the model expects "
-                f"{model_k} (distinct speed_* features)."
-            )
-
         native_k = getattr(backend, "native_keypoint_count", None)
         if native_k is not None:
             if native_k != model_k:
@@ -129,26 +164,12 @@ class LiveBehaviorClassifier:
                 stacklevel=2,
             )
 
-        # Names agreeing in *count* is not enough. With FeatureSpec.auto_angles
-        # the angle columns are named after the keypoints at given indices, so a
-        # re-ordering yields columns that never appear: they arrive as NaN,
-        # every prediction comes back blank, and nothing raises.
-        expected = expected_keypoint_order(model)
-        if expected and names != expected:
-            raise KeypointMismatchError(
-                "keypoint names are in a different order than the behavior "
-                f"model was trained on.\n  model:    {expected}\n"
-                f"  provided: {names}"
-            )
-
         self._model = model
         self.backend = backend
         self.keypoint_names = names
         self.conf_threshold = float(conf_threshold)
 
-        per_frame, spectral = derive_stream_columns(model)
-        self._ext = StreamingFeatureExtractor(model.spec, self.keypoint_names, model.fps)
-        self._buf = SlidingFeatureBuffer(per_frame, model.window, model.stats, spectral)
+        self._ext, self._buf = _stream(model, self.keypoint_names)
 
         self.window = model.window
         self.warmup = self._ext.lag
@@ -156,19 +177,91 @@ class LiveBehaviorClassifier:
     def classify_frame(self, bgr) -> LiveResult:
         """Classify one BGR frame; never resets on NaN / no-detection."""
         kps, _ = self.backend.predict(bgr)
-        row = self._ext.push(kps)
-        if row is not None:
-            self._buf.push_features(row)
-        if self._buf.is_full():
-            label = self._model.predict_one(pd.Series(self._buf.rolling_dict()))
-        else:
-            label = ""
-        return LiveResult(label, kps)
+        return LiveResult(self.classify_keypoints(kps), kps)
+
+    def classify_keypoints(self, kps: np.ndarray) -> str:
+        """Push one ``(K, 2)`` keypoint row; the label, or "" during warm-up."""
+        return _push(self._model, self._ext, self._buf, kps)
 
     def reset(self) -> None:
         """Clear the extractor history + rolling buffer (re-arm warm-up)."""
         self._ext.reset()
         self._buf.clear()
+
+
+class AnimalBehaviorClassifiers:
+    """One live classifier stream per named animal, fed tracked keypoints.
+
+    With identity on, the CV processor's tracker already decodes each named
+    animal's keypoints, so no pose backend is needed here: each animal gets its
+    own extractor + rolling buffer over the shared behaviour model.
+    """
+
+    def __init__(
+        self,
+        model,
+        keypoint_names: list[str],
+        animals: list[str],
+        conf_threshold: float = 0.25,
+    ):
+        names = list(keypoint_names)
+        _check_model(model, names)
+        self._model = model
+        self._k = len(names)
+        self._conf = float(conf_threshold)
+        self._names = list(animals)
+        self._streams = {a: _stream(model, names) for a in self._names}
+        self._last = dict.fromkeys(self._names, "")
+
+    def _row(self, kps) -> np.ndarray:
+        """Tracked ``(K, 2|3)`` keypoints → ``(K, 2)``, low confidence as NaN."""
+        out = np.full((self._k, 2), np.nan)
+        if kps is None:
+            return out
+        kps = np.asarray(kps, dtype=float)
+        n = min(self._k, len(kps))
+        out[:n] = kps[:n, :2]
+        if kps.ndim == 2 and kps.shape[1] >= 3:
+            out[:n][kps[:n, 2] < self._conf] = np.nan
+        return out
+
+    def push(self, tracked: list, timestamp: float, frame_index: int) -> list[BehaviorEvent]:
+        """One event per named animal for this frame, in the configured order.
+
+        A hidden (or missing) animal pushes an all-NaN row so the extractor
+        keeps its frame spacing, and reports its last label with
+        ``visible=False``.
+        """
+        by_name = {o.animal: o for o in tracked if o.animal is not None}
+        events = []
+        # ponytail: classifies every named animal, not only those a node
+        # references -- predict_one is cheap next to the pose net; filter per
+        # reference if profiling says so.
+        for name in self._names:
+            obj = by_name.get(name)
+            visible = obj is not None and obj.visible
+            kps = self._row(obj.keypoints) if visible else np.full((self._k, 2), np.nan)
+            label = _push(self._model, *self._streams[name], kps)
+            if visible:
+                self._last[name] = label
+            events.append(
+                BehaviorEvent(
+                    behavior=self._last[name],
+                    frame_index=frame_index,
+                    timestamp=timestamp,
+                    keypoints=kps,
+                    animal=name,
+                    visible=visible,
+                )
+            )
+        return events
+
+    def reset(self) -> None:
+        """Clear every animal's history (re-arm warm-up)."""
+        for ext, buf in self._streams.values():
+            ext.reset()
+            buf.clear()
+        self._last = dict.fromkeys(self._names, "")
 
 
 def _load_backend(model_path, keypoint_names, conf_threshold: float = 0.25):

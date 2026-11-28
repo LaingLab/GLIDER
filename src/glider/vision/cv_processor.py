@@ -162,6 +162,16 @@ def _resolve_device_for_yolo() -> str:
     return resolve_device(None)
 
 
+IDENTITY_MODES = ("off", "appearance", "continuity")
+
+
+def identity_unsupported_reason(backend: "DetectionBackend") -> str | None:
+    """Why *backend* cannot name animals, or None for the YOLO backends."""
+    if backend in (DetectionBackend.YOLO_V8, DetectionBackend.YOLO_BYTETRACK):
+        return None
+    return f"Identity needs a YOLO model; the active backend is {backend.name}."
+
+
 class DetectionBackend(Enum):
     """Available detection backends."""
 
@@ -249,6 +259,9 @@ class TrackedObject:
     disappeared: int = 0  # Frames since last seen
     velocity: float = 0.0  # Current velocity in pixels/frame
     keypoints: np.ndarray | None = None  # Nx2 or Nx3 array of keypoint coords
+    animal: str | None = None  # identity name; None = unnamed
+    visible: bool = True  # False = named animal hidden, held at last seen spot
+    identity_flag: str = ""  # "close+stitched+gap+relabeled" subset; "" = certain
 
     def to_dict(self) -> dict[str, Any]:
         result = {
@@ -259,6 +272,9 @@ class TrackedObject:
             "centroid": self.centroid,
             "age": self.age,
             "velocity": self.velocity,
+            "animal": self.animal,
+            "visible": self.visible,
+            "identity_flag": self.identity_flag,
         }
         if self.keypoints is not None:
             result["keypoints"] = self.keypoints.tolist()
@@ -316,6 +332,14 @@ class CVSettings:
     vision_cone_fov: float = 120.0  # Total field of view in degrees
     vision_cone_color: tuple[int, int, int] = (0, 255, 255)  # BGR yellow
     vision_cone_alpha: float = 0.3  # Overlay transparency
+    # Live multi-animal identity. "off" keeps tracks anonymous, as before.
+    identity_mode: str = "off"
+    # Each {"name": str, "class_name": str | None}; class_name is the model
+    # class that marks this animal in "appearance" mode.
+    animals: list[dict[str, str | None]] = field(default_factory=list)
+    identity_separation_px: float = 60.0
+    identity_relabel_s: float = 0.5
+    identity_max_travel_px: float = 40.0
 
     def copy(self) -> "CVSettings":
         """Return an independent copy, safe to hand to a mutating consumer.
@@ -327,7 +351,11 @@ class CVSettings:
         must copy first, or the edit lands on the live object and
         ``update_settings`` can no longer tell what changed.
         """
-        return replace(self, keypoint_names=list(self.keypoint_names))
+        return replace(
+            self,
+            keypoint_names=list(self.keypoint_names),
+            animals=[dict(a) for a in self.animals],
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -357,6 +385,11 @@ class CVSettings:
             "vision_cone_fov": self.vision_cone_fov,
             "vision_cone_color": self.vision_cone_color,
             "vision_cone_alpha": self.vision_cone_alpha,
+            "identity_mode": self.identity_mode,
+            "animals": [dict(a) for a in self.animals],
+            "identity_separation_px": self.identity_separation_px,
+            "identity_relabel_s": self.identity_relabel_s,
+            "identity_max_travel_px": self.identity_max_travel_px,
         }
 
     @classmethod
@@ -395,6 +428,18 @@ class CVSettings:
             vision_cone_fov=data.get("vision_cone_fov", 120.0),
             vision_cone_color=tuple(data.get("vision_cone_color", [0, 255, 255])),
             vision_cone_alpha=data.get("vision_cone_alpha", 0.3),
+            identity_mode=(
+                data["identity_mode"] if data.get("identity_mode") in IDENTITY_MODES else "off"
+            ),
+            # An animal with no name can't be referenced or exported: drop it.
+            animals=[
+                dict(a)
+                for a in data.get("animals", [])
+                if isinstance(a, dict) and str(a.get("name") or "").strip()
+            ],
+            identity_separation_px=data.get("identity_separation_px", 60.0),
+            identity_relabel_s=data.get("identity_relabel_s", 0.5),
+            identity_max_travel_px=data.get("identity_max_travel_px", 40.0),
         )
 
 
@@ -405,6 +450,17 @@ class CVSettings:
 # IDs in the log. 1 is ByteTrack's own first ID, so a clean single-animal run
 # reads the same with or without the pin.
 SINGLE_ANIMAL_TRACK_ID = 1
+
+
+def _identity_key(s: CVSettings) -> tuple:
+    """Every setting the identity assigner is built from, copied."""
+    return (
+        s.identity_mode,
+        [dict(a) for a in s.animals],
+        s.identity_separation_px,
+        s.identity_relabel_s,
+        s.identity_max_travel_px,
+    )
 
 
 def keep_most_confident(detections: list[Detection]) -> list[Detection]:
@@ -594,6 +650,11 @@ class CVProcessor:
         # stays "cpu" until then and if no GPU is present.
         self._device: str = "cpu"
         self._tracker: ObjectTracker | None = None
+        self._identity: Any = None  # IdentityAssigner, built lazily when identity is on
+        self._identity_key: tuple | None = None  # settings the assigner was built from
+        #: Per-animal live behaviour classifier (AnimalBehaviorClassifiers).
+        self._animal_classifier: Any = None
+        self._animal_behavior_callbacks: list[Callable[[Any], None]] = []
         self._initialized = False
         self._lock = threading.Lock()
 
@@ -685,6 +746,82 @@ class CVProcessor:
     def is_initialized(self) -> bool:
         """Whether CV processor is initialized."""
         return self._initialized
+
+    @property
+    def identity_unavailable_reason(self) -> str | None:
+        """Why identity cannot run, or None (off, or the backend supports it)."""
+        if self._settings.identity_mode == "off":
+            return None
+        return identity_unsupported_reason(self._active_backend)
+
+    @property
+    def class_names(self) -> list[str]:
+        """The loaded YOLO model's class names, in class-id order ([] if none)."""
+        names = getattr(self._yolo_model, "names", None) or {}
+        return [str(n) for n in (names.values() if isinstance(names, dict) else names)]
+
+    @property
+    def identity_active(self) -> bool:
+        return self._settings.identity_mode != "off" and self.identity_unavailable_reason is None
+
+    @property
+    def identity_ready(self) -> bool:
+        return self._identity is not None and self._identity.ready
+
+    @property
+    def needs_every_frame(self) -> bool:
+        return self.identity_active and self._animal_classifier is not None
+
+    def set_animal_classifiers(self, obj: Any) -> None:
+        """Attach (or with None, detach) per-animal live behaviour classifiers."""
+        self._animal_classifier = obj
+
+    def on_animal_behavior(self, callback: Callable[[Any], None]) -> None:
+        """Register a callback for each per-animal ``BehaviorEvent``.
+
+        Fired from :meth:`process_frame`, i.e. on the CVWorker thread.
+        """
+        self._animal_behavior_callbacks.append(callback)
+
+    def _get_identity(self):
+        if self._identity is None:
+            from glider.vision.identity_live import IdentityAssigner
+
+            s = self._settings
+            # A snapshot: the dialog may edit the live settings' animals in place.
+            self._identity_key = _identity_key(s)
+            # ponytail: fps isn't plumbed into CVProcessor; assume 30.
+            fps = 30.0
+            self._identity = IdentityAssigner(
+                [a["name"] for a in s.animals],
+                mode=s.identity_mode,
+                class_names=[a.get("class_name") for a in s.animals],
+                max_travel_px=s.identity_max_travel_px,
+                separation_px=s.identity_separation_px,
+                relabel_frames=round(s.identity_relabel_s * fps),
+                fps=fps,
+            )
+        return self._identity
+
+    def clear_identity(self) -> None:
+        """Forget who is who (the next trial names its animals afresh).
+
+        The identity assigner and any per-animal classifiers' history; trails,
+        ByteTrack and zones are untouched.
+        """
+        with self._lock:
+            self._identity = None
+            if self._animal_classifier is not None:
+                self._animal_classifier.reset()
+
+    def seed_identity(
+        self,
+        placements: dict[str, tuple[float, float]],
+        anonymous: list[tuple[float, float]],
+    ) -> list[str]:
+        """Bind clicks to the last frame's detections; returns unbound names."""
+        with self._lock:
+            return self._get_identity().seed(self._last_detections, placements, anonymous)
 
     def set_zone_configuration(self, config: "ZoneConfiguration") -> None:
         """
@@ -912,10 +1049,11 @@ class CVProcessor:
         if not self._initialized:
             self.initialize()
 
-        # Frame skipping for performance
+        # Frame skipping for performance (identity needs every frame)
+        identity = self.identity_active
         self._frame_counter += 1
         skip_n = self._settings.process_every_n_frames
-        if skip_n > 1 and (self._frame_counter % skip_n) != 1:
+        if not identity and skip_n > 1 and (self._frame_counter % skip_n) != 1:
             # Return cached results (but don't fire callbacks for skipped frames)
             self.last_result_cached = True
             return self._last_detections, self._last_tracked, self._last_motion
@@ -931,15 +1069,18 @@ class CVProcessor:
                 fg_mask = self._bg_subtractor.apply(frame)
 
             # Run detection
-            detections = self._detect(frame, fg_mask)
-            if self._settings.single_animal:
+            # Identity does its own tracking: plain YOLO detections, no ByteTrack.
+            detections = self._detect_yolo(frame) if identity else self._detect(frame, fg_mask)
+            if self._settings.single_animal and not identity:
                 detections = self._keep_single_animal(detections)
 
             # Run tracking
             tracked = []
             if self._settings.tracking_enabled:
+                if identity:
+                    tracked = self._get_identity().update(detections, timestamp)
                 # ByteTrack provides its own tracking - convert detections to TrackedObjects
-                if self._active_backend == DetectionBackend.YOLO_BYTETRACK:
+                elif self._active_backend == DetectionBackend.YOLO_BYTETRACK:
                     tracked = self._bytetrack_to_tracked(detections)
                 elif self._tracker:
                     # Use centroid tracker for other backends
@@ -963,6 +1104,20 @@ class CVProcessor:
             self._last_detections = detections
             self._last_tracked = tracked
             self._last_motion = motion
+            classifier = self._animal_classifier if identity else None
+
+        if classifier is not None:
+            try:
+                events = classifier.push(tracked, timestamp, self._frame_counter)
+            except Exception:
+                logger.exception("Per-animal behaviour classification failed")
+                events = []
+            for event in events:
+                for cb in self._animal_behavior_callbacks:
+                    try:
+                        cb(event)
+                    except Exception as e:
+                        logger.error(f"Animal behavior callback error: {e}")
 
         # Notify zone callbacks
         if zone_states:
@@ -1289,13 +1444,20 @@ class CVProcessor:
         if tracked:
             for obj in tracked:
                 x, y, w, h = obj.bbox
-                cv2.rectangle(output, (x, y), (x + w, y + h), color, thickness)
+                # A hidden named animal is held at its last spot: drawn dimmed.
+                shade = color if obj.visible else (128, 128, 128)
+                cv2.rectangle(output, (x, y), (x + w, y + h), shade, thickness)
+                if obj.animal:
+                    cx, cy = (int(v) for v in obj.centroid)
+                    cv2.putText(
+                        output, obj.animal, (cx, cy), cv2.FONT_HERSHEY_SIMPLEX, 0.6, shade, 2
+                    )
 
                 if self._settings.show_labels:
                     label = f"ID:{obj.track_id} {obj.class_name}"
                     label_size, _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
                     cv2.rectangle(
-                        output, (x, y - label_size[1] - 10), (x + label_size[0], y), color, -1
+                        output, (x, y - label_size[1] - 10), (x + label_size[0], y), shade, -1
                     )
                     cv2.putText(
                         output, label, (x, y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1
@@ -1439,6 +1601,8 @@ class CVProcessor:
         old_backend = self._settings.backend
         old_model_path = self._settings.model_path
         self._settings = settings
+        if self._identity_key != _identity_key(settings):
+            self._identity = None
 
         # Reinitialize if the backend changed, or if the model path changed on
         # a model-backed backend. Previously only a backend change triggered a
@@ -1466,6 +1630,7 @@ class CVProcessor:
             self._tracker.reset()
         self._trail_history.clear()
         self._bytetrack_ages.clear()
+        self._identity = None
         # model.track(persist=True) keeps its ByteTrack state (IDs, Kalman
         # filters) on the predictor; without this it carries across trials.
         predictor = getattr(self._yolo_model, "predictor", None)

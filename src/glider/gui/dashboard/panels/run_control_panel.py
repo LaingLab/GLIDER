@@ -215,6 +215,8 @@ class RunControlPanel(QWidget):
                 if self._touch
                 else "Connect the board to start (Hardware > Connect All)."
             )
+        elif r.identity_message:
+            self._not_ready_hint.setText(r.identity_message.rstrip(".") + ".")
         else:
             self._not_ready_hint.setText("Add a Start Experiment node to the flow to start.")
         self._not_ready_hint.setVisible(not ready and not live)

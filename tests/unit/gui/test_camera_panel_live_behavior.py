@@ -309,3 +309,80 @@ def test_rehearsal_status_is_hidden_until_there_is_news(qtbot):
     panel._show_rehearse_status("Ready to rehearse from a recording.")
     assert panel._rehearse_status.isVisibleTo(panel)
     assert panel._rehearse_status.text() == "Ready to rehearse from a recording."
+
+
+# ---------------------------------------------------------------------------
+# identity on: one classifier per named animal, fed by the CV processor
+# ---------------------------------------------------------------------------
+
+
+def test_identity_live_behavior_classifies_each_named_animal(
+    qtbot, tiny_behavior_model, tmp_path, monkeypatch
+):
+    from glider.core.live_signals import LiveSignalBus
+    from glider.gui.panels.camera_panel import CameraPanel
+    from glider.gui.panels.live_behavior import AnimalBehaviorClassifiers, model_keypoint_count
+    from glider.vision.camera_manager import CameraManager
+    from glider.vision.cv_processor import (
+        CVProcessor,
+        CVSettings,
+        DetectionBackend,
+        TrackedObject,
+    )
+
+    k = model_keypoint_count(tiny_behavior_model)
+    names = [f"k{i}" for i in range(k)]
+    pkl = tmp_path / "m.pkl"
+    tiny_behavior_model.save(pkl)
+    cv = CVProcessor(
+        CVSettings(
+            backend=DetectionBackend.YOLO_V8,
+            identity_mode="appearance",
+            keypoint_names=names,
+            animals=[{"name": "Dam", "class_name": None}, {"name": "Pup", "class_name": None}],
+        )
+    )
+    cv._initialized = True
+    panel = CameraPanel(CameraManager(), cv)
+    qtbot.addWidget(panel)
+    bus = LiveSignalBus()
+    events = []
+    bus.subscribe_behavior(events.append)
+    panel.set_live_signals(bus)
+
+    panel._behavior_pkl = pkl
+    panel._pose_model_path = tmp_path / "y.pt"
+    panel._kp_names_edit.setText(", ".join(names))
+    panel._update_live_controls_enabled()
+    panel._toggle_live_behavior()
+
+    # No frame fan-out worker: the CV processor carries the classifiers.
+    assert panel._behavior_worker is None and panel._behavior_thread is None
+    assert isinstance(cv._animal_classifier, AnimalBehaviorClassifiers)
+    assert panel._behavior_running is True
+    assert panel._live_behavior_btn.text() == "Stop"
+    assert bus.behaviors == list(tiny_behavior_model.classes)
+    fanned = []
+    panel._behavior_frame_requested.connect(fanned.append)
+    monkeypatch.setattr(panel, "_submit_to_cv", lambda fd: None)
+    monkeypatch.setattr(panel, "_process_frame_on_main_thread", lambda fd: None)
+    panel._handle_frame_input(_frame())
+    assert fanned == []
+
+    def _obj(name):
+        return TrackedObject(
+            0, "m", (0, 0, 1, 1), 1.0, (0, 0), keypoints=_distinct_kps(k), animal=name
+        )
+
+    monkeypatch.setattr(cv, "_detect_yolo", lambda frame: [])
+    monkeypatch.setattr(
+        cv,
+        "_get_identity",
+        lambda: type("I", (), {"update": lambda s, d, t=None: [_obj("Dam"), _obj("Pup")]})(),
+    )
+    cv.process_frame(np.zeros((8, 8, 3), np.uint8), 0.0)
+    assert [e.animal for e in events] == ["Dam", "Pup"]
+
+    panel.stop_live_behavior()
+    assert cv._animal_classifier is None
+    assert panel._behavior_running is False

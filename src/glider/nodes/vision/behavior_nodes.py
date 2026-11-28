@@ -49,6 +49,10 @@ class BehaviorInputNode(InterfaceNode):
         Behavior    the most recent label, whatever it is
         On Enter    exec, once, when the behavior becomes confirmed
         On Exit     exec, once, when it stops being confirmed
+        Visible     whether the chosen animal is seen (always True for Any)
+
+    With an Animal set, only that animal's events count; Any takes only the
+    untagged events of the single-animal publisher.
 
     There is no confidence output. The live path's ``LiveResult`` carries a
     label and keypoints only, so a confidence port would read zero on every
@@ -87,6 +91,11 @@ class BehaviorInputNode(InterfaceNode):
                 port_type=PortType.EXEC,
                 description="Triggered once when the target behavior ends",
             ),
+            PortDefinition(
+                name="Visible",
+                data_type=bool,
+                description="True while the chosen animal is seen (always True for Any)",
+            ),
         ],
         color="#5a4a2d",  # Orange - interface color
     )
@@ -107,12 +116,20 @@ class BehaviorInputNode(InterfaceNode):
             "min": 1,
             "help": "Consecutive frames required before the behaviour counts.",
         },
+        {
+            "key": "animal",
+            "label": "Animal",
+            "type": "str",
+            "default": "",
+            "help": "React only to this named animal. Empty means the untagged single-animal feed.",
+        },
     ]
 
     def __init__(self) -> None:
         super().__init__()
         self._target_behavior: str = self.setting("target_behavior")
         self._min_frames: int = self.setting("min_frames")
+        self._animal: str = self.setting("animal")
 
         self._active = False
         self._last_behavior = ""
@@ -123,7 +140,7 @@ class BehaviorInputNode(InterfaceNode):
         self._subscribed = False
         self._main_loop: asyncio.AbstractEventLoop | None = None
 
-        self._outputs = [False, "", None, None]
+        self._outputs = [False, "", None, None, True]
 
     # -- configuration ----------------------------------------------------
     @property
@@ -227,6 +244,12 @@ class BehaviorInputNode(InterfaceNode):
 
     def handle_behavior_event(self, event: BehaviorEvent) -> None:
         """Called once per classified frame, from the vision thread."""
+        if (event.animal or "") != self._animal:
+            return
+        self.set_output(4, event.visible)
+        if not event.visible:
+            return  # stale label: leave the outputs and the confirmation runs alone
+
         label = (event.behavior or "").strip()
 
         self._last_behavior = label
@@ -277,12 +300,14 @@ class BehaviorInputNode(InterfaceNode):
         state = super().get_state()
         state["target_behavior"] = self._target_behavior
         state["min_frames"] = self._min_frames
+        state["animal"] = self._animal
         return state
 
     def set_state(self, state: dict[str, Any]) -> None:
         super().set_state(state)
         self._target_behavior = self.setting("target_behavior")
         self.min_frames = self.setting("min_frames")
+        self._animal = self.setting("animal")
         self._reset_run_state()
 
     def get_display_name(self) -> str:

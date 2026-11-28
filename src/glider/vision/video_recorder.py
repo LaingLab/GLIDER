@@ -247,6 +247,7 @@ class VideoRecorder:
         self._frame_count = 0
         self._annotated_frame_count = 0
         self._recording_fps = 30.0  # Actual FPS used for recording
+        self._frame_ts: list[float] = []  # capture time of each raw-video frame
         self._video_format = VideoFormat()
         self._lock = threading.Lock()
         self._frame_callback_registered = False
@@ -300,6 +301,21 @@ class VideoRecorder:
     def frame_count(self) -> int:
         """Number of frames recorded."""
         return self._frame_count
+
+    @property
+    def first_frame_timestamp(self) -> float | None:
+        """Capture timestamp of the first frame written to the raw video."""
+        return self._frame_ts[0] if self._frame_ts else None
+
+    @property
+    def frame_timestamps(self) -> list[float]:
+        """Capture timestamp of every frame in the raw video, in order (pauses leave gaps)."""
+        return self._frame_ts
+
+    @property
+    def fps(self) -> float:
+        """Frame rate of the raw video: measured from capture timestamps, else the header's."""
+        return self._clock.fps or self._recording_fps
 
     @property
     def duration(self) -> float:
@@ -378,6 +394,7 @@ class VideoRecorder:
         self._start_time = datetime.now()
         self._frame_count = 0
         self._annotated_frame_count = 0
+        self._frame_ts = []
 
         # Get camera settings for video writer
         settings = self._camera.settings
@@ -485,6 +502,7 @@ class VideoRecorder:
 
         if self._writer_thread is not None:
             if self._writer_thread.enqueue(frame.copy()):
+                self._frame_ts.append(timestamp)
                 self._frame_count += 1
                 self._clock.tick(timestamp)
             else:

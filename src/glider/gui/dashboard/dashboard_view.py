@@ -98,8 +98,12 @@ class DashboardView(QWidget):
     def rail(self) -> QWidget:
         return self._rail
 
-    def set_health(self, fps: float | None, dropped: int, recording: bool) -> None:
+    def set_health(
+        self, fps: float | None, dropped: int, recording: bool, cv_lagging: bool = False
+    ) -> None:
         self._fps.setText("-- fps" if fps is None else f"{fps:.1f} fps")
+        if cv_lagging:
+            self._fps.setText(self._fps.text() + " · CV lagging")
         self._dropped.setText(f"{dropped} dropped")
         self._dropped.setProperty("warn", dropped > 0)
         self._dropped.style().unpolish(self._dropped)

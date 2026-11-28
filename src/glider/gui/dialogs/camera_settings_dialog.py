@@ -30,6 +30,8 @@ from PyQt6.QtWidgets import (
     QScroller,
     QSlider,
     QSpinBox,
+    QTableWidget,
+    QTableWidgetItem,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -40,7 +42,12 @@ if TYPE_CHECKING:
     from glider.vision.camera_manager import CameraManager
 
 from glider.vision.camera_manager import CameraSettings
-from glider.vision.cv_processor import CVSettings, DetectionBackend, parse_keypoint_names
+from glider.vision.cv_processor import (
+    CVSettings,
+    DetectionBackend,
+    identity_unsupported_reason,
+    parse_keypoint_names,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -59,10 +66,13 @@ class CameraSettingsDialog(QDialog):
         parent=None,
         view_manager: Optional["ViewManager"] = None,
         camera_manager: Optional["CameraManager"] = None,
+        class_names: list[str] | None = None,
     ):
         super().__init__(parent)
         self._camera_settings = camera_settings or CameraSettings()
         self._cv_settings = cv_settings or CVSettings()
+        # The loaded YOLO model's classes, offered for each animal (appearance).
+        self._class_names = list(class_names or [])
         self._view_manager = view_manager
         self._camera_manager = camera_manager  # For live LED/EWL control
         self._is_touch_mode = view_manager.is_runner_mode if view_manager else False
@@ -524,6 +534,7 @@ class CameraSettingsDialog(QDialog):
         detection_layout.addRow(self._single_animal_cb)
 
         layout.addWidget(detection_group)
+        layout.addWidget(self._create_identity_group())
 
         # Overlay group
         overlay_group = QGroupBox("Display")
@@ -554,6 +565,91 @@ class CameraSettingsDialog(QDialog):
         layout.addStretch()
 
         return widget
+
+    def _create_identity_group(self) -> QGroupBox:
+        """Name each animal live: by its YOLO class, or by a click at run start."""
+        group = self._identity_group = QGroupBox("Identity")
+        self._apply_touch_group_property(group)
+        form = self._identity_form = QFormLayout(group)
+
+        self._identity_mode_combo = QComboBox()
+        self._identity_mode_combo.addItem("Off", "off")
+        self._identity_mode_combo.addItem("By appearance", "appearance")
+        self._identity_mode_combo.addItem("Name at start", "continuity")
+        self._identity_mode_combo.currentIndexChanged.connect(self._on_identity_mode_changed)
+        form.addRow("Animals:", self._identity_mode_combo)
+
+        self._animals_table = QTableWidget(0, 2)
+        self._animals_table.setHorizontalHeaderLabels(["Name", "Class"])
+        self._animals_table.horizontalHeader().setStretchLastSection(True)
+        self._animals_table.verticalHeader().setVisible(False)
+        self._animals_table.setMinimumHeight(110)
+        form.addRow(self._animals_table)
+
+        buttons = QHBoxLayout()
+        self._add_animal_btn = QPushButton("Add animal")
+        self._add_animal_btn.clicked.connect(lambda: self._add_animal_row("", None))
+        self._remove_animal_btn = QPushButton("Remove")
+        self._remove_animal_btn.setProperty("buttonRole", "secondary")
+        self._remove_animal_btn.clicked.connect(
+            lambda: self._animals_table.removeRow(self._animals_table.currentRow())
+        )
+        buttons.addWidget(self._add_animal_btn)
+        buttons.addWidget(self._remove_animal_btn)
+        buttons.addStretch()
+        self._animal_buttons = QWidget()
+        self._animal_buttons.setLayout(buttons)
+        form.addRow(self._animal_buttons)
+
+        self._identity_relabel_spin = QDoubleSpinBox()
+        self._identity_relabel_spin.setRange(0.0, 10.0)
+        self._identity_relabel_spin.setSingleStep(0.1)
+        self._identity_relabel_spin.setSuffix(" s")
+        self._identity_relabel_spin.setToolTip(
+            "How long the model must keep calling an animal a different class\n"
+            "before its name follows the new class."
+        )
+        form.addRow("Relabel after:", self._identity_relabel_spin)
+
+        self._identity_separation_spin = QDoubleSpinBox()
+        self._identity_separation_spin.setRange(0.0, 1000.0)
+        self._identity_separation_spin.setSuffix(" px")
+        self._identity_separation_spin.setToolTip(
+            "Animals closer than this are flagged 'close' in the tracking data."
+        )
+        form.addRow("Close within:", self._identity_separation_spin)
+
+        self._identity_travel_spin = QDoubleSpinBox()
+        self._identity_travel_spin.setRange(1.0, 1000.0)
+        self._identity_travel_spin.setSuffix(" px/frame")
+        self._identity_travel_spin.setToolTip(
+            "The furthest an animal can move in one frame; a farther match is refused."
+        )
+        form.addRow("Travel limit:", self._identity_travel_spin)
+        return group
+
+    def _add_animal_row(self, name: str, class_name: str | None) -> None:
+        row = self._animals_table.rowCount()
+        self._animals_table.insertRow(row)
+        self._animals_table.setItem(row, 0, QTableWidgetItem(name))
+        combo = QComboBox()
+        combo.setEditable(True)  # a class can be typed before the model loads
+        combo.addItems(self._class_names)
+        combo.setCurrentText(class_name or "")
+        self._animals_table.setCellWidget(row, 1, combo)
+
+    def _on_identity_mode_changed(self, _index: int = 0) -> None:
+        mode = self._identity_mode_combo.currentData()
+        for widget in (
+            self._animals_table,
+            self._animal_buttons,
+            self._identity_separation_spin,
+            self._identity_travel_spin,
+        ):
+            self._identity_form.setRowVisible(widget, mode != "off")
+        self._identity_form.setRowVisible(self._identity_relabel_spin, mode == "appearance")
+        # A click names the animal in "Name at start"; its class plays no part.
+        self._animals_table.setColumnHidden(1, mode != "appearance")
 
     def _create_tools_tab_content(self) -> QWidget:
         """Create the tools tab content with calibration and zones buttons."""
@@ -796,6 +892,16 @@ class CameraSettingsDialog(QDialog):
         self._min_area_spin.setValue(self._cv_settings.min_detection_area)
         self._frame_skip_spin.setValue(self._cv_settings.process_every_n_frames)
         self._single_animal_cb.setChecked(self._cv_settings.single_animal)
+        cv = self._cv_settings
+        self._identity_mode_combo.setCurrentIndex(
+            max(0, self._identity_mode_combo.findData(cv.identity_mode))
+        )
+        for animal in cv.animals:
+            self._add_animal_row(animal.get("name") or "", animal.get("class_name"))
+        self._identity_relabel_spin.setValue(cv.identity_relabel_s)
+        self._identity_separation_spin.setValue(cv.identity_separation_px)
+        self._identity_travel_spin.setValue(cv.identity_max_travel_px)
+        self._on_identity_mode_changed()
         self._draw_overlays_cb.setChecked(self._cv_settings.draw_overlays)
         self._show_keypoints_cb.setChecked(self._cv_settings.show_keypoints)
 
@@ -815,6 +921,7 @@ class CameraSettingsDialog(QDialog):
         self._min_area_spin.setEnabled(enabled)
         self._frame_skip_spin.setEnabled(enabled)
         self._single_animal_cb.setEnabled(enabled)
+        self._identity_group.setEnabled(enabled)
         self._draw_overlays_cb.setEnabled(enabled)
         self._show_keypoints_cb.setEnabled(enabled)
         self._draw_tracks_cb.setEnabled(enabled)
@@ -876,6 +983,10 @@ class CameraSettingsDialog(QDialog):
         self._single_animal_cb.setVisible(
             backend not in (DetectionBackend.MOTION_ONLY, DetectionBackend.POSE_MODEL)
         )
+        # Kept, not reset, off YOLO: the Run page's readiness says why it won't run.
+        reason = identity_unsupported_reason(self._backend_combo.currentData())
+        self._identity_mode_combo.setEnabled(reason is None)
+        self._identity_mode_combo.setToolTip(reason or "")
 
     def _on_miniscope_mode_toggle(self, enabled: bool):
         """Handle miniscope mode toggle - auto-set recommended values."""
@@ -989,11 +1100,32 @@ class CameraSettingsDialog(QDialog):
 
     def _apply_settings(self):
         """Apply settings without closing dialog."""
-        self._save_settings()
-        logger.info("Camera settings applied")
+        if self._save_settings():
+            logger.info("Camera settings applied")
 
-    def _save_settings(self):
-        """Save UI values to settings objects."""
+    def _identity_problem(self) -> str | None:
+        """Why the Identity section can't be saved as entered, or None."""
+        mode = self._identity_mode_combo.currentData()
+        if mode == "off":  # the animals table is hidden; nothing to fix there
+            return None
+        names = [
+            (self._animals_table.item(row, 0) or QTableWidgetItem()).text().strip()
+            for row in range(self._animals_table.rowCount())
+        ]
+        names = [n for n in names if n]
+        dupes = sorted({n for n in names if names.count(n) > 1})
+        if dupes:
+            return "Each animal needs its own name; used more than once: " + ", ".join(dupes)
+        if mode == "continuity" and not names:
+            return "Name at start needs at least one named animal."
+        return None
+
+    def _save_settings(self) -> bool:
+        """Save UI values to settings objects; False (nothing saved) if invalid."""
+        problem = self._identity_problem()
+        if problem:
+            QMessageBox.warning(self, "Identity", problem)
+            return False
         # Camera settings
         self._camera_settings.resolution = self._resolution_combo.currentData()
         self._camera_settings.fps = self._fps_spin.value()
@@ -1041,13 +1173,25 @@ class CameraSettingsDialog(QDialog):
         self._cv_settings.min_detection_area = self._min_area_spin.value()
         self._cv_settings.process_every_n_frames = self._frame_skip_spin.value()
         self._cv_settings.single_animal = self._single_animal_cb.isChecked()
+        self._cv_settings.identity_mode = self._identity_mode_combo.currentData()
+        animals = []
+        for row in range(self._animals_table.rowCount()):
+            name = (self._animals_table.item(row, 0) or QTableWidgetItem()).text().strip()
+            if name:
+                cls = self._animals_table.cellWidget(row, 1).currentText().strip()
+                animals.append({"name": name, "class_name": cls or None})
+        self._cv_settings.animals = animals
+        self._cv_settings.identity_relabel_s = self._identity_relabel_spin.value()
+        self._cv_settings.identity_separation_px = self._identity_separation_spin.value()
+        self._cv_settings.identity_max_travel_px = self._identity_travel_spin.value()
         self._cv_settings.draw_overlays = self._draw_overlays_cb.isChecked()
         self._cv_settings.show_keypoints = self._show_keypoints_cb.isChecked()
+        return True
 
     def accept(self):
         """Handle dialog acceptance."""
-        self._save_settings()
-        super().accept()
+        if self._save_settings():
+            super().accept()
 
     def get_camera_settings(self) -> CameraSettings:
         """Get the camera settings."""
