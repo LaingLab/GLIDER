@@ -1,8 +1,7 @@
 """The `--version` flag prints the version and exits 0.
 
-The PyInstaller smoke build in CI runs `GLIDER.exe --version` and asserts a
-clean exit, so the entry point must support the flag. ``parse_args()`` reads
-from ``sys.argv``, so these tests patch it rather than passing an argv list.
+``parse_args()`` reads from ``sys.argv``, so these tests patch it rather than
+passing an argv list.
 """
 
 import sys

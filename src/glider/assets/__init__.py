@@ -4,7 +4,7 @@ This subpackage ships the runtime icon alongside the Python code so it's
 available after ``pip install`` or inside a PyInstaller bundle. The higher-
 resolution master lives at ``packaging/icons/glider_source.png`` and is *not*
 shipped — it's the source for derived variants under this directory and for
-``packaging/icons/glider.ico`` (Windows installer).
+the ``packaging/icons`` files that ``glider shortcut`` installs.
 
 Public API:
 
