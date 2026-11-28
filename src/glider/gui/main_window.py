@@ -423,6 +423,8 @@ class MainWindow(QMainWindow):
     # on this thread's call stack.
     _device_link_changed = pyqtSignal(str, object)
     _session_dirtied = pyqtSignal()
+    # Core session replaced; queued so it is safe from the flow loop thread.
+    _session_replaced = pyqtSignal(object)
 
     def __init__(
         self,
@@ -2713,6 +2715,10 @@ class MainWindow(QMainWindow):
 
         self._core.on_state_change(lambda state: self._core_state_changed.emit(state))
         self._core.on_error(lambda source, error: self._core_error_occurred.emit(source, error))
+        # Same thread (qasync), so no signal hop needed.
+        self._core.flow_engine.on_node_active(
+            lambda node_id, active: self._graph_view.set_node_active(node_id, active)
+        )
         self._core.hardware_manager.on_connection_change(
             lambda board_id, state: self._hardware_connection_changed.emit(board_id, state)
         )
@@ -2735,7 +2741,11 @@ class MainWindow(QMainWindow):
         # reason as the two above -- ``_mark_dirty`` is called from callbacks
         # this window does not own.
         self._session_dirtied.connect(self._refresh_strip_experiment)
-        self._core.on_session_change(self._watch_session)
+        # Through a signal: with the flow loop thread on (core/flow_loop.py) the
+        # core can replace the session from that thread, and _watch_session
+        # touches widgets.
+        self._session_replaced.connect(self._watch_session)
+        self._core.on_session_change(self._session_replaced.emit)
         self._watch_session(self._core.session)
 
         # _runner_device_controls is built in both operator views (shared).
@@ -2899,8 +2909,10 @@ class MainWindow(QMainWindow):
           2. If the board dropped *during* a running experiment, pause and
              surface the hardware-disconnection dialog.
         """
-        # (1) Always refresh the readouts.
+        # (1) Always refresh the readouts. Every pin device's link_state is
+        # derived from its board, so a board moving moves all of their rows.
         self._refresh_hardware_readouts()
+        self._refresh_device_link_widgets()
 
         # (2) Pause-on-drop guard only applies to terminal-failure states
         # reached while an experiment is actually running.
@@ -2984,6 +2996,11 @@ class MainWindow(QMainWindow):
                 panel.refresh_link_states()
         if self._device_control_panel:
             self._device_control_panel.refresh_link_state()
+        # The run panel's rows repaint on a timer only while RUNNING; idle,
+        # they kept showing a dead board's devices as connected.
+        self._runner_device_controls.refresh_values()
+        if self._pi_run_page is not None:
+            self._pi_run_page.devices.update_states()
 
     def _refresh_hardware_readouts(self) -> None:
         """Both readouts of the same rig, refreshed together.
@@ -3104,7 +3121,14 @@ class MainWindow(QMainWindow):
         button_layout.addWidget(stop_btn)
 
         layout.addLayout(button_layout)
-        dialog.exec()
+        # open(), never exec(): this is reached synchronously from inside an
+        # asyncio task step (a board write notices the drop -> _set_state ->
+        # same-thread signal -> here, and from retry_connection). A nested
+        # exec() loop there makes asyncio refuse to step every other task
+        # ("Cannot enter into task ... while another task is being executed"),
+        # silently killing the flow, the pause() above and the recorder.
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        dialog.open()
 
     def _handle_disconnection_retry(self, dialog: QDialog, board_id: str) -> None:
         dialog.accept()
@@ -4339,6 +4363,7 @@ class MainWindow(QMainWindow):
         """
         from glider.core.experiment_session import SessionState
         from glider.core.flow_engine import FlowState
+        from glider.core.flow_loop import post_to_loop
         from glider.core.graph_functions import find_run_param
 
         if self._manual_run_busy:
@@ -4378,9 +4403,15 @@ class MainWindow(QMainWindow):
             self._runner_device_controls.set_function_running(start_node_id, True)
             try:
                 runner = engine.get_function_runner(start_node_id)
+                # execute() may run on the flow loop thread (core/flow_loop.py),
+                # so the timeout callback posts its widget update back here.
+                gui_loop = asyncio.get_running_loop()
                 completed = await runner.execute(
-                    on_timeout=lambda: self._runner_device_controls.show_status(
-                        "Function is unresponsive — cancelled", level="warn"
+                    on_timeout=lambda: post_to_loop(
+                        gui_loop,
+                        lambda: self._runner_device_controls.show_status(
+                            "Function is unresponsive — cancelled", level="warn"
+                        ),
                     )
                 )
                 if completed:

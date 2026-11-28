@@ -51,12 +51,6 @@ These are **optional** features behind extras:
 Confirm your machine's compute setup from the **Tools** tab, with
 **GPU / Device Check**.
 
-## macOS won't open the app
-
-An unnotarized app can be blocked on first launch. **Right-click the app →
-Open**, then confirm. You only need to do this once. See
-[Installation](../getting-started/installation.md#prebuilt-app).
-
 ## The Runner is stuck in kiosk mode
 
 Runner mode is one-mode-per-process by design. To get back to the desktop

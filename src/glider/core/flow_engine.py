@@ -13,6 +13,7 @@ from enum import Enum, auto
 from typing import Any
 
 from glider.core import flow_clock
+from glider.core.flow_loop import wrap_public_coroutines
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +78,7 @@ class FlowEngine:
         self._node_update_callbacks: list[Callable[[str, str, Any], None]] = []
         self._error_callbacks: list[Callable[[str, Exception], None]] = []
         self._complete_callbacks: list[Callable[[], None]] = []
+        self._node_active_callbacks: list[Callable[[str, bool], None]] = []
 
         # Try to import ryvencore
         self._ryvencore_available = False
@@ -183,6 +185,18 @@ class FlowEngine:
     def on_node_update(self, callback: Callable[[str, str, Any], None]) -> None:
         """Register callback for node output updates (node_id, output_name, value)."""
         self._node_update_callbacks.append(callback)
+
+    def on_node_active(self, callback: Callable[[str, bool], None]) -> None:
+        """Register callback for (node_id, active): a node is active from the
+        moment execution reaches it until it fires an exec output or returns."""
+        self._node_active_callbacks.append(callback)
+
+    def _notify_node_active(self, node_id: str, active: bool) -> None:
+        for callback in self._node_active_callbacks:
+            try:
+                callback(node_id, active)
+            except Exception as e:
+                logger.error(f"Node active callback error: {e}")
 
     def on_error(self, callback: Callable[[str, Exception], None]) -> None:
         """Register callback for errors."""
@@ -496,6 +510,8 @@ class FlowEngine:
                 logger.debug(f"Skipping callback - output '{output_name}' != expected '{expected}'")
                 return None
             logger.debug(f"Exec callback fired: {fn}:{fo} -> {tn}, flow state: {self._state}")
+            # Execution has left the source node.
+            self._notify_node_active(fn, False)
             if self._state == FlowState.RUNNING:
                 logger.info(f"Propagating execution: {fn} -> {tn}")
                 task = asyncio.create_task(self._propagate_execution(fn, fo, tn))
@@ -551,6 +567,7 @@ class FlowEngine:
         # This task inherited the upstream task's context; report only this
         # node's own chain.
         flow_clock.begin_chain()
+        self._notify_node_active(to_node_id, True)
         try:
             if hasattr(to_node, "execute") and callable(to_node.execute):
                 logger.info(f"Executing node: {to_node_id} (type: {type(to_node).__name__})")
@@ -581,6 +598,8 @@ class FlowEngine:
                 f"Critical framework error during execution propagation: {e}", exc_info=True
             )
             self._notify_error("Framework", e)
+        finally:
+            self._notify_node_active(to_node_id, False)
         return flow_clock.chain_end()
 
     def remove_connection(self, connection_id: str) -> None:
@@ -1088,3 +1107,7 @@ class FlowEngine:
         logger.info(
             f"Loaded flow with {len(self._nodes)} nodes and {len(self._connections)} connections"
         )
+
+
+# Every public coroutine runs on the flow loop when it is on (core/flow_loop.py).
+wrap_public_coroutines(FlowEngine)

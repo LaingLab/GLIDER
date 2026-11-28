@@ -327,6 +327,11 @@ class BehaviorAnalysisWindow(QMainWindow):
         self.tabs = QTabWidget()
         self.tabs.setObjectName("StepTabs")
         self.tabs.setDocumentMode(True)
+        # No native tab-bar base: on macOS it paints its own grey bar and a
+        # raised selected tab, so the steps would not match the other tools'
+        # step strips (tools.qss draws the bar instead).
+        self.tabs.tabBar().setDrawBase(False)
+        self.tabs.tabBar().setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.annotate_tab = AnnotateTab(self.project_dir)
         self.tabs.addTab(self.annotate_tab, "Annotate")
         self.train_tab = TrainTab()

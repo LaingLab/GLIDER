@@ -520,7 +520,8 @@ def test_step_strip_tracks_progress(window, tmp_path):
         window._calibrations.set_arena(video, _arena_cal())
     window._validate()
 
-    assert window._steps.steps_text() == ["Model ✓", "Videos · 5 ✓", "Arenas · 2 of 5", "Track"]
+    assert window._steps.steps_text() == ["Model", "Videos · 5", "Arenas · 2 of 5", "Track"]
+    assert window._steps.done() == [True, True, False, False]  # ticks are in the badges
     assert window._steps.current() == 2
 
 

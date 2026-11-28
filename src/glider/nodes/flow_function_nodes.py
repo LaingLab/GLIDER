@@ -11,6 +11,7 @@ import contextlib
 import logging
 from typing import TYPE_CHECKING
 
+from glider.core.flow_loop import on_flow_loop
 from glider.nodes.base_node import (
     GliderNode,
     NodeCategory,
@@ -93,6 +94,7 @@ class FlowFunctionRunner:
             if end_node and hasattr(end_node, "set_completion_callback"):
                 end_node.set_completion_callback(callback)
 
+    @on_flow_loop
     async def execute(self, timeout: float = 60.0, on_timeout=None) -> bool:
         """Run the function until an EndFunction node is reached.
 

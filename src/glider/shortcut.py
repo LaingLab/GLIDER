@@ -9,8 +9,7 @@ where the OS search looks (#216):
 * Linux: a ``.desktop`` entry in ``~/.local/share/applications``.
 
 Each launches *this* interpreter with ``-m glider``, so it starts the same
-environment the command was run from. The packaged DMG and installer builds do
-not need this: they are already apps.
+environment the command was run from.
 """
 
 from __future__ import annotations

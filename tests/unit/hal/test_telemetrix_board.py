@@ -288,3 +288,27 @@ async def test_emergency_stop_survives_pin_modes_mutation():
     await board.emergency_stop()
     assert ("digital_write", 2, 0) in calls
     assert ("digital_write", 4, 0) in calls
+
+
+@pytest.mark.asyncio
+async def test_link_supervisor_notices_an_unplugged_idle_board():
+    """Nothing reads is_connected on an idle rig, so the poll has to."""
+    from glider.core.hardware_manager import HardwareManager
+
+    reader = asyncio.get_running_loop().create_future()
+    thread = TelemetrixThread()
+    thread._thread = types.SimpleNamespace(is_alive=lambda: True)
+    thread._telemetrix = types.SimpleNamespace(the_task=reader, shutdown_flag=False)
+    board = TelemetrixBoard(port="COM3")
+    board._telemetrix_thread = thread
+    board._state = BoardConnectionState.CONNECTED
+    manager = HardwareManager()
+    manager._boards["a"] = board
+    seen = []
+    board.register_state_callback(seen.append)
+
+    reader.set_exception(OSError(6, "Device not configured"))
+    manager.poll_board_links()
+
+    assert board.state is BoardConnectionState.DISCONNECTED
+    assert seen == [BoardConnectionState.DISCONNECTED]

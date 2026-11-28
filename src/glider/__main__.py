@@ -452,6 +452,13 @@ def main() -> int:
 
             splash = show_splash()
             try:
+                # Before init_glider, so everything that connects hardware or
+                # starts a flow lands on the flow loop thread when it is on.
+                from glider.core import flow_loop
+
+                if flow_loop.enabled_by_setting():
+                    flow_loop.start(home_loop=asyncio.get_running_loop())
+
                 core = await init_glider(app, args)
 
                 force_mode = None
@@ -533,6 +540,12 @@ def main() -> int:
                 loop.run_until_complete(app._glider_core.shutdown())
             except RuntimeError:
                 pass  # Loop closed or shutdown already completed
+
+        # Last: core.shutdown() above (or in closeEvent) still ran its
+        # hardware teardown on the flow loop.
+        from glider.core import flow_loop
+
+        flow_loop.stop()
 
         return 0
 

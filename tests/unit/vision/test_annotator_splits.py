@@ -166,10 +166,7 @@ def test_deficit_rule_can_pick_test(project):
 def test_leak_notice(project):
     assert leak_notice(project) == ""
     _add(project, "a", 200)
-    assert leak_notice(project) == (
-        "All frames come from one video \u2014 validation scores will look better than "
-        "they are. Add a second video for an honest check."
-    )
+    assert leak_notice(project) == ""  # one video always splits per frame: nothing to act on
     project.videos["b"] = "/v/b.avi"
     assert leak_notice(project).startswith("a.avi has frames in train and in val/test \u2014 ")
     for f in project.frames:
