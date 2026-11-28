@@ -40,7 +40,6 @@ from PyQt6.QtWidgets import (
     QListWidget,
     QMainWindow,
     QMessageBox,
-    QProgressBar,
     QPushButton,
     QSpinBox,
     QTabBar,
@@ -54,6 +53,7 @@ from glider.analysis.behavior.classify.smoothing import DEFAULT_OFFLINE_WINDOW
 from glider.gui.behavior.step_parts import OptionsPopup, StepFooter, summary_label
 from glider.gui.qthreads import retire_thread
 from glider.gui.styles import restyle
+from glider.gui.widgets.glider_progress import GliderProgress
 from glider.gui.widgets.tool_ui import (
     GUTTER,
     Card,
@@ -1341,7 +1341,7 @@ class TrainTab(QWidget):
         # --- results: shown once a run starts, and kept -----------------
         results_card = Card("Results")
         self._results_card = results_card
-        self._progress = QProgressBar()
+        self._progress = GliderProgress()
         self._progress.setVisible(False)
         results_card.add(self._progress)
         self._results = QTextEdit()
@@ -2028,7 +2028,7 @@ class ApplyTab(QWidget):
         # --- results: shown once a run starts, and kept -----------------
         results_card = Card("Results")
         self._results_card = results_card
-        self._progress = QProgressBar()
+        self._progress = GliderProgress()
         self._progress.setVisible(False)
         results_card.add(self._progress)
         self._results = QTextEdit()

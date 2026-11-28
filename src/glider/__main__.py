@@ -16,6 +16,14 @@ Usage:
 import os
 import sys
 
+# The launch splash runs as a child process of the app (see glider.gui.splash).
+# Dispatched before everything below: it needs nothing but PyQt6, and the
+# torch preload alone would cost it seconds on Windows.
+if sys.argv[1:2] == ["_splash"]:
+    from glider.gui.splash import run_child
+
+    sys.exit(run_child())
+
 # --- Windows torch / PyQt6 DLL load-order workaround ------------------------
 # On Windows, importing PyQt6 before torch poisons torch's native library load:
 # the first ``import torch`` afterwards fails with

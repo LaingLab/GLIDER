@@ -6,8 +6,7 @@ Everything you need to go from nothing to a running experiment.
 
 -   :material-download: **[Installation](installation.md)**
 
-    Install GLIDER on macOS, Windows, Linux, or a Raspberry Pi — either from a
-    prebuilt app or from source.
+    Install GLIDER on macOS, Windows, Linux, or a Raspberry Pi with one command.
 
 -   :material-flask: **[Your First Experiment](first-experiment.md)**
 
