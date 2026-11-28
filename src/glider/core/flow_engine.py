@@ -510,8 +510,10 @@ class FlowEngine:
                 logger.debug(f"Skipping callback - output '{output_name}' != expected '{expected}'")
                 return None
             logger.debug(f"Exec callback fired: {fn}:{fo} -> {tn}, flow state: {self._state}")
-            # Execution has left the source node.
-            self._notify_node_active(fn, False)
+            # Execution has left the source node -- unless it keeps running
+            # after this output (a Loop's body); then it clears on return.
+            if output_name not in getattr(from_node_obj, "STAYS_ACTIVE_ON", ()):
+                self._notify_node_active(fn, False)
             if self._state == FlowState.RUNNING:
                 logger.info(f"Propagating execution: {fn} -> {tn}")
                 task = asyncio.create_task(self._propagate_execution(fn, fo, tn))

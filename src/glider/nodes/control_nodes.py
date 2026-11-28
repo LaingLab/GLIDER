@@ -44,6 +44,9 @@ class LoopNode(GliderNode):
         ],
     )
 
+    # Still running after firing body: stays lit on the canvas (FlowEngine).
+    STAYS_ACTIVE_ON = ("body",)
+
     PROPERTIES_SCHEMA = [
         {
             "key": "count",
