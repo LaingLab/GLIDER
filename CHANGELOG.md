@@ -371,6 +371,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     what any usable TensorFlow loads a SLEAP checkpoint into). Conversion is
     verified end to end on tensorflow-cpu 2.21 with tf2onnx 1.17.
 
+### Removed
+
+- **The macOS and Windows installers.** GLIDER no longer builds a `.dmg` or a
+  Windows installer: `packaging/macos`, `packaging/windows`, their release
+  workflows and the `pyinstaller` dev dependency are gone. Install from source
+  with `install.sh` or `install.ps1`, which also updates GLIDER when run again.
+  An installer you already have keeps working but gets no new versions. The
+  Raspberry Pi SD-card image is unchanged.
+
 ### Fixed
 
 - **A folder of Batch Pose videos opens in Session Review.** Videos tracked by

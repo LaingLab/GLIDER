@@ -44,6 +44,7 @@ from glider.core.experiment_types import ANALYSIS_PUP_RETRIEVAL, has_analysis
 from glider.gui.pose_batch.calibration_table import CalibrationTable
 from glider.gui.qthreads import retire_thread
 from glider.gui.styles import colors
+from glider.gui.widgets.glider_progress import GliderProgress
 from glider.gui.widgets.tool_ui import (
     GUTTER,
     Card,
@@ -393,7 +394,7 @@ class PoseBatchWindow(QMainWindow):
         self._video_bar = QProgressBar()
         self._video_bar.setFormat("%v / %m frames")
         panel.addWidget(self._video_bar)
-        self._overall_bar = QProgressBar()
+        self._overall_bar = GliderProgress()
         self._overall_bar.setFormat("%v / %m videos")
         panel.addWidget(self._overall_bar)
         self._progress_panel.setVisible(False)

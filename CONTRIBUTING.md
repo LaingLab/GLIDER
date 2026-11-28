@@ -118,6 +118,12 @@ Reference issues (`Fixes #123`, `Closes #456`) where applicable.
 
 ## Pull requests
 
+**Which branch to target:**
+
+- **`dev`** for features, including ones that aren't finished yet: something off by default, needing hardware we can't test in CI, or waiting on real data. Most PRs go here.
+- **`main`** only for bug fixes and cleanup that should ship in the next release. When one lands, merge `main` back into `dev` straight away so the two don't drift.
+- At release time, `dev` merges into `main`. CI runs on both branches.
+
 - One logical change per PR. "Refactor X" + "Add feature Y" should be two PRs.
 - Update `CHANGELOG.md` under `## [Unreleased]` in the same PR.
 - If you touched anything in the "Known limitations" list of `CHANGELOG.md`, update or remove that bullet.

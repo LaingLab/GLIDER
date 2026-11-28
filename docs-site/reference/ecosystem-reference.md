@@ -239,7 +239,7 @@ GLIDER runs on Python 3.12, the only version CI tests; the Raspberry Pi runs on 
 | `behavior` | UMAP, HDBSCAN, scikit-learn, LightGBM, matplotlib, and YAML support. |
 | `dev` | Development and test tooling plus the broad desktop/vision/behavior stack. |
 
-Desktop installation targets Windows, macOS, and Linux. Raspberry Pi deployment uses system PyQt6 and a virtual environment with access to system site packages. The repository also contains packaging for a Pi kiosk image, macOS, and Windows. A prebuilt Pi kiosk can auto-start Runner mode, but deployment documentation should be checked against the particular release image rather than assumed from source alone.
+Desktop installation targets Windows, macOS, and Linux. Raspberry Pi deployment uses system PyQt6 and a virtual environment with access to system site packages. The repository also contains packaging for a Pi kiosk image; macOS and Windows install from source. A prebuilt Pi kiosk can auto-start Runner mode, but deployment documentation should be checked against the particular release image rather than assumed from source alone.
 
 ## Testing and evidence boundaries
 

@@ -58,7 +58,5 @@ A few areas of the codebase warrant extra reviewer attention:
 
 The following are tracked as bugs but not treated as security issues:
 
-- The unsigned Windows installer (acknowledged in `CHANGELOG.md`).
-- The unsigned macOS bundle (acknowledged in `CHANGELOG.md`).
 - Issues that require physical access to the Pi to exploit.
 - Issues that require an attacker to already have shell access as the `glider` user.
