@@ -280,7 +280,8 @@ def classify_pose_data(
     trajectory at all, so for those models this is the only way to apply
     them. Motion needs ``video``, the recording ``pose`` was tracked from;
     ``pose_csv``, when given, lets it reuse the per-session cache training
-    wrote instead of decoding the video again.
+    wrote instead of decoding the video again. The image lane
+    (``model.image_lane``) needs ``video`` too, and caches the same way.
     """
     from glider.analysis.behavior.classify.features_stream import derive_stream_columns
     from glider.analysis.behavior.classify.smoothing import (
@@ -288,6 +289,7 @@ def classify_pose_data(
         centered_majority_vote,
     )
     from glider.analysis.behavior.features import compute_features
+    from glider.analysis.behavior.image_lane import required_columns
     from glider.analysis.behavior.trajectory import apply_trajectory_rolling
     from glider.analysis.behavior.windowing import apply_rolling, apply_spectral_rolling
 
@@ -298,6 +300,12 @@ def classify_pose_data(
     per_frame_names, spectral = derive_stream_columns(model)
     uses_motion = any(c.startswith("motion_") for c in per_frame_names)
     uses_traj = any(c.startswith("traj_") for c in model.feature_names)
+    lane = getattr(model, "image_lane", None)
+    if lane is not None and video is None:
+        raise NotImplementedError(
+            "this model uses the image lane, which is read from the source video, "
+            "and none was given"
+        )
     if uses_motion and video is None:
         # motion_* is frame differencing on the source video. Scoring without
         # it would blank every row, so decline and let the caller say why.
@@ -337,6 +345,12 @@ def classify_pose_data(
         traj = apply_trajectory_rolling(pose.xy, body_axis=ba, window=model.window).iloc[lag:]
         traj.index = rolled.index
         rolled = pd.concat([rolled, traj], axis=1)
+    if lane is not None:
+        # Row i of `rolled` describes frame i + lag; the lane is windowed at
+        # that same frame, from frames up to it (past-only lanes) -- frames
+        # the live path has already seen when it emits this row.
+        raw = _image_lane_raw(pose, model.spec, lane.config, video, pose_csv)
+        rolled = pd.concat([rolled, lane.frame_features(raw, query=rolled.index)], axis=1)
     windowed = rolled.reindex(columns=model.feature_names)
 
     # Rows are tagged with the middle frame they describe, so row i of `windowed` is
@@ -374,9 +388,13 @@ def classify_pose_data(
 
     values = windowed.to_numpy(dtype=np.float64)
     scored = values[emit_rows]
-    # Blank on any NaN, exactly as predict_one does — a partially-known row is
-    # not a weak prediction, it is no prediction.
-    usable = ~np.isnan(scored).any(axis=1)
+    # Blank on any NaN keypoint feature, exactly as predict_one does — a
+    # partially-known row is not a weak prediction, it is no prediction. The
+    # image lane is the exception: a missed mask leaves its columns NaN and
+    # the classifier routes them, as it did in training.
+    required = set(required_columns(model.feature_names))
+    req_idx = [i for i, c in enumerate(model.feature_names) if c in required]
+    usable = ~np.isnan(scored[:, req_idx]).any(axis=1)
 
     raw = np.full(len(scored), "", dtype=object)
     if usable.any():
@@ -433,6 +451,18 @@ def _motion_features(pose, spec, video, pose_csv, index) -> pd.DataFrame:
         motion = compute_motion_for_video(Path(video), pose.xy, ba)
     motion.index = index
     return motion
+
+
+def _image_lane_raw(pose, spec, config, video, pose_csv) -> np.ndarray:
+    """Raw image-lane rows for ``pose``: the training cache when there is a pose CSV."""
+    from pathlib import Path
+
+    from glider.analysis.behavior.image_lane import compute_raw_for_video, load_or_compute_raw
+
+    ba = spec.with_resolved_body_axis(pose.n_keypoints).body_axis
+    if pose_csv is not None:
+        return load_or_compute_raw(Path(pose_csv), Path(video), pose.xy, ba, config)
+    return compute_raw_for_video(Path(video), pose.xy, ba, config)
 
 
 def classify_pose_tracks(tracks: PoseTracks, model, **kw) -> dict[int, EthogramRows]:

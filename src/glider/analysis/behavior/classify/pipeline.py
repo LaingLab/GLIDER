@@ -31,6 +31,7 @@ from glider.analysis.behavior.classify.threads import (
     BehaviorClassifier,
     DisplayConsumer,
     FeatureEngine,
+    ImageLaneWorker,
     LatestLabel,
     PoseReplay,
     PoseTracker,
@@ -111,6 +112,8 @@ RAW_QUEUE_MAX = 4
 TRACKED_QUEUE_MAX = 4
 DISPLAY_QUEUE_MAX = 4
 CLASSIFIER_QUEUE_MAX = 8
+# In front of the image-lane worker, which encodes what has queued in one batch.
+LANE_QUEUE_MAX = 16
 # Small: an extra frame consumer is usually the slowest stage, and a stale frame
 # is worth less than a fresh one.
 FRAME_CONSUMER_QUEUE_MAX = 2
@@ -352,6 +355,34 @@ class LiveInferencePipeline:
         # extraction matches at training and inference time).
         self.spec = self.model.spec
 
+        # Image lane: an extra stage between the tracker and the feature
+        # engine. Refused up front for a centred lane, which would need frames
+        # the stream has not reached.
+        self.image_lane = getattr(self.model, "image_lane", None)
+        self.lane_worker = None
+        engine_queue = self.tracked_queue
+        if self.image_lane is not None:
+            if self.image_lane.config.center:
+                raise RuntimeError(
+                    "this model's image lane uses a centred window, which reads "
+                    "frames after the one it describes, so it cannot run live. "
+                    "Retrain with the default past-only lane."
+                )
+            # A deeper queue in front of the lane: the worker micro-batches
+            # whatever has queued, so a short stall is absorbed rather than
+            # dropped. Replaced before the tracker is built, so it feeds this.
+            self.tracked_queue = queue.Queue(maxsize=LANE_QUEUE_MAX)
+            self.lane_queue: queue.Queue = queue.Queue(maxsize=TRACKED_QUEUE_MAX)
+            self.lane_worker = ImageLaneWorker(
+                in_queue=self.tracked_queue,
+                out_queue=self.lane_queue,
+                stop_event=self.stop_event,
+                artifact=self.image_lane,
+                body_axis=self.spec.with_resolved_body_axis(len(config.keypoint_names)).body_axis,
+                device=config.device,
+            )
+            engine_queue = self.lane_queue
+
         # Pre-build the threads (started later via run()).
         self.producer = VideoProducer(
             source=config.source,
@@ -369,7 +400,7 @@ class LiveInferencePipeline:
             extra_queues=self._consumer_queues,
         )
         self.feature_engine = FeatureEngine(
-            tracked_queue=self.tracked_queue,
+            tracked_queue=engine_queue,
             classifier_queue=self.classifier_queue,
             stop_event=self.stop_event,
             spec=self.spec,
@@ -383,6 +414,7 @@ class LiveInferencePipeline:
             dart_threshold=config.dart_threshold,
             freeze_min_frames=config.freeze_min_frames,
             dart_min_frames=config.dart_min_frames,
+            image_lane=self.image_lane,
         )
         self.classifier = BehaviorClassifier(
             classifier_queue=self.classifier_queue,
@@ -507,6 +539,7 @@ class LiveInferencePipeline:
             threads = [
                 self.producer,
                 self.tracker,
+                *([self.lane_worker] if self.lane_worker is not None else []),
                 self.feature_engine,
                 self.classifier,
                 self.display,
@@ -532,7 +565,12 @@ class LiveInferencePipeline:
                 t.join(timeout=2.0)
             # Surface any per-thread errors so the user knows what
             # broke instead of staring at a silent exit.
-            for t in (self.producer, self.tracker, *self.frame_consumers):
+            for t in (
+                self.producer,
+                self.tracker,
+                getattr(self, "lane_worker", None),
+                *self.frame_consumers,
+            ):
                 err = getattr(t, "error", None)
                 if err:
                     print(f"[{t.name}] error: {err}")

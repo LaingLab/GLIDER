@@ -133,6 +133,13 @@ def _windowed_for(model: BehaviorModel, pose_csv: Path, fps: float) -> pd.DataFr
         traj_frame = apply_trajectory_rolling(pose.xy, body_axis=axis, window=model.window)
         traj_frame.index = windowed.index
         windowed = pd.concat([windowed, traj_frame], axis=1)
+    lane = getattr(model, "image_lane", None)
+    if lane is not None:
+        from glider.analysis.behavior.pipeline import _image_lane_raw
+
+        img = lane.frame_features(_image_lane_raw(Path(pose_csv), pose, model.spec, lane.config))
+        img.index = windowed.index
+        windowed = pd.concat([windowed, img], axis=1)
     return windowed
 
 
