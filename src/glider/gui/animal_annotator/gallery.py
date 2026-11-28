@@ -36,6 +36,8 @@ _STRIP_W = 96
 #: Thumbnail width the cache holds; tiles scale it to fit.
 _THUMB_W = 360
 _CAPTION_H = 22
+#: Diameter of the split dot on a tile.
+_DOT = 12
 _PAD = 5
 _STATUS_COLOUR = {"labelled": "#4ade80", "todo": "#64748b", "skipped": "#f59e0b"}
 _SPLIT_COLOUR = {"train": "#38bdf8", "val": "#c084fc", "test": "#fb923c"}
@@ -115,6 +117,10 @@ class GalleryModel(QAbstractListModel):
     SplitRole = Qt.ItemDataRole.UserRole + 3
     #: Instances (animals or outlines) on the frame, cached with the thumbnail.
     AnimalCountRole = Qt.ItemDataRole.UserRole + 4
+    #: Lower-case text the search box matches: frame name, file name, video, frame number.
+    SearchRole = Qt.ItemDataRole.UserRole + 5
+    #: An imported image's original file name; "" for a video frame.
+    SourceRole = Qt.ItemDataRole.UserRole + 6
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -161,11 +167,19 @@ class GalleryModel(QAbstractListModel):
             return frame.name
         if role == Qt.ItemDataRole.ToolTipRole:
             video = self._project.videos.get(frame.video, frame.video)
-            return f"{frame.name}\nFrame {frame.frame} of {video}\nClick to label"
+            split = f"\n{frame.split.capitalize()} split" if frame.split else ""
+            if frame.source:
+                return f"{frame.source}\nImage in {video}{split}\nClick to label"
+            return f"{frame.name}\nFrame {frame.frame} of {video}{split}\nClick to label"
         if role == self.StatusRole:
             return frame_status(self._project, frame)
         if role == self.CaptionRole:
             return (frame.frame, frame.video)
+        if role == self.SourceRole:
+            return frame.source
+        if role == self.SearchRole:
+            video = Path(self._project.videos.get(frame.video, frame.video)).name
+            return f"{frame.name} {frame.source} {video} f{frame.frame}".lower()
         if role == self.SplitRole:
             return frame.split
         if role == self.AnimalCountRole:
@@ -184,7 +198,7 @@ class GalleryModel(QAbstractListModel):
 
 
 class _TileDelegate(QStyledItemDelegate):
-    """Image with a split badge and status chip, caption underneath, accent border when selected.
+    """Image with a split dot and status chip, caption underneath, accent border when selected.
 
     In a filmstrip only the image and a status dot are drawn.
     """
@@ -249,9 +263,10 @@ class _TileDelegate(QStyledItemDelegate):
 
         split = index.data(GalleryModel.SplitRole)
         if split:
-            self._chip(
-                painter, image_rect, split.upper(), _SPLIT_COLOUR.get(split, "#ffffff"), right=False
-            )
+            # A dot in the split's colour; the strip above the grid is the key.
+            painter.setPen(QPen(QColor(0, 0, 0, 170), 1.5))
+            painter.setBrush(QColor(_SPLIT_COLOUR.get(split, "#ffffff")))
+            painter.drawEllipse(image_rect.left() + 6, image_rect.top() + 6, _DOT, _DOT)
         count = index.data(GalleryModel.AnimalCountRole)
         noun = "outline" if self._view.outlines else "animal"
         if status == "skipped":
@@ -264,8 +279,11 @@ class _TileDelegate(QStyledItemDelegate):
 
         caption = QRect(cell.left(), image_rect.bottom() + 3, cell.width(), _CAPTION_H - 3)
         number, video = index.data(GalleryModel.CaptionRole)
+        name = index.data(GalleryModel.SourceRole)
         text = painter.fontMetrics().elidedText(
-            f"{Path(video).name} \u00b7 f{number}", Qt.TextElideMode.ElideMiddle, caption.width()
+            name or f"{Path(video).name} \u00b7 f{number}",
+            Qt.TextElideMode.ElideMiddle,
+            caption.width(),
         )
         painter.setPen(QColor(colors.TEXT_SECONDARY))
         painter.drawText(caption, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, text)
@@ -284,6 +302,8 @@ class GalleryView(QListView):
 
     frame_activated = pyqtSignal(int)
     selection_changed = pyqtSignal()
+    #: Delete or Backspace with tiles selected.
+    delete_pressed = pyqtSignal()
 
     def __init__(self, parent=None, *, strip: bool = False):
         super().__init__(parent)
@@ -291,6 +311,7 @@ class GalleryView(QListView):
         #: Segmentation project: chips say "outline" rather than "animal".
         self.outlines = False
         self._filter: tuple[str | None, str | None, str | None] = (None, None, None)
+        self._search: list[str] = []
         self._press_row: int | None = None
         self.gallery_model = GalleryModel(self)
         self.setItemDelegate(_TileDelegate(self))
@@ -343,6 +364,15 @@ class GalleryView(QListView):
         self._filter = (status, split, video)
         self.apply_filter()
 
+    def set_search(self, text: str) -> None:
+        """Show only frames whose name, file name, video or frame number has every word."""
+        self._search = text.lower().split()
+        self.apply_filter()
+
+    @property
+    def search_text(self) -> str:
+        return " ".join(self._search)
+
     @property
     def current_filter(self) -> tuple[str | None, str | None, str | None]:
         """(status, split, video) as last given to :meth:`set_filter`."""
@@ -358,6 +388,7 @@ class GalleryView(QListView):
                 (status is None or index.data(GalleryModel.StatusRole) == status)
                 and (split is None or index.data(GalleryModel.SplitRole) == split)
                 and (video is None or index.data(GalleryModel.CaptionRole)[1] == video)
+                and all(w in index.data(GalleryModel.SearchRole) for w in self._search)
             )
             self.setRowHidden(row, not keep)
 
@@ -397,6 +428,9 @@ class GalleryView(QListView):
     def keyPressEvent(self, event) -> None:
         if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and self.currentIndex().isValid():
             self.frame_activated.emit(self.currentIndex().row())
+            return
+        if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace) and self.selected_rows():
+            self.delete_pressed.emit()
             return
         super().keyPressEvent(event)
 

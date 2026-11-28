@@ -11,19 +11,21 @@ Phase 1 of #224. A project labels either keypoints (pose) or outlines
    Segment Anything from a click or a box (the Auto tool). Esc goes back.
 
 **Export Dataset** writes ``data.yaml`` with the stored splits, ready for
-Ultralytics. Training inside GLIDER comes next, on this same project folder.
+Ultralytics. **Train Model** exports and then trains a YOLO model on it in a
+child process (see :mod:`.train_dialog`); runs land in ``<project>/runs/``.
 
 Labels are saved as you go, on every edit; there is no Save button to forget.
 """
 
 from __future__ import annotations
 
+import html
 import logging
 import math
 import threading
 from pathlib import Path
 
-from PyQt6.QtCore import QObject, QSettings, Qt, QThread, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import QObject, QRect, QSettings, QSize, Qt, QThread, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import (
     QActionGroup,
     QColor,
@@ -75,7 +77,11 @@ from glider.gui.qthreads import retire_thread
 from glider.gui.styles import colors
 from glider.gui.widgets.pastel_glyphs import lucide_icon
 from glider.vision.training.dataset import DatasetError, export_dataset
-from glider.vision.training.frames import ExtractionCancelledError, extract_frames
+from glider.vision.training.frames import (
+    ExtractionCancelledError,
+    extract_frames,
+    import_images,
+)
 from glider.vision.training.project import (
     PROJECT_FILE,
     TASK_POSE,
@@ -119,9 +125,36 @@ class _Pill(QLabel):
         self.setVisible(bool(text))
 
 
-def _rail_button(glyph: str, tip: str) -> QToolButton:
+def _glyph_icon(glyph: str, size: int = 22) -> QIcon:
+    """``glyph`` drawn as an icon: grey normally, accent when the tool is on."""
+    icon = QIcon()
+    for colour, state in (
+        (colors.TEXT_SECONDARY, QIcon.State.Off),
+        (colors.ACCENT, QIcon.State.On),
+    ):
+        for scale in (1, 2):
+            pixmap = QPixmap(size * scale, size * scale)
+            pixmap.setDevicePixelRatio(scale)
+            pixmap.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(pixmap)
+            painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
+            font = painter.font()
+            font.setPixelSize(size - 2)
+            painter.setFont(font)
+            painter.setPen(QColor(colour))
+            painter.drawText(QRect(0, 0, size, size), Qt.AlignmentFlag.AlignCenter, glyph)
+            painter.end()
+            icon.addPixmap(pixmap, QIcon.Mode.Normal, state)
+    return icon
+
+
+def _rail_button(glyph: str, name: str, tip: str) -> QToolButton:
+    """A tool on the editor's rail: its glyph with its name underneath."""
     button = QToolButton()
-    button.setText(glyph)
+    button.setIcon(_glyph_icon(glyph))
+    button.setIconSize(QSize(22, 22))
+    button.setText(name)
+    button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
     button.setToolTip(tip)
     button.setCheckable(True)
     button.setProperty("railTool", True)
@@ -356,10 +389,18 @@ class ExtractWorker(QObject):
     finished = pyqtSignal(int, list)  # frames added, error messages
     cancelled = pyqtSignal(int)  # frames added before the cancel
 
-    def __init__(self, project: StudioProject, videos: list[Path], per_video: int, method: str):
+    def __init__(
+        self,
+        project: StudioProject,
+        videos: list[Path],
+        per_video: int,
+        method: str,
+        images: list[Path] | None = None,
+    ):
         super().__init__()
         self._project = project
         self._videos = videos
+        self._images = list(images or [])
         self._per_video = per_video
         self._method = method
         self._cancel = threading.Event()
@@ -370,13 +411,35 @@ class ExtractWorker(QObject):
     def run(self) -> None:
         added, errors = 0, []
         known = set(self._project.videos)
-        # Register every video first, so splits are assigned knowing the real
-        # video count (a lone registered video would get per-frame splits).
+        # Register every video (and image folder) first, so splits are assigned
+        # knowing the real count (a lone registered video gets per-frame splits).
         for video in self._videos:
             self._project.video_key(video)
+        for image in self._images:
+            self._project.video_key(Path(image).parent)
+        steps = len(self._videos) + (1 if self._images else 0)
         try:
+            if self._images:
+                self.video_started.emit(0, steps, f"{len(self._images)} image(s)")
+                try:
+                    added += len(
+                        import_images(
+                            self._project,
+                            self._images,
+                            progress_cb=self.progress.emit,
+                            cancel_cb=self._cancel.is_set,
+                        )
+                    )
+                except ExtractionCancelledError:
+                    self._drop_empty(known)
+                    self.cancelled.emit(added)
+                    return
+                except Exception as e:  # report and carry on with the videos
+                    logger.exception("image import failed")
+                    errors.append(f"images: {e}")
+            first = steps - len(self._videos)
             for i, video in enumerate(self._videos):
-                self.video_started.emit(i, len(self._videos), video.name)
+                self.video_started.emit(first + i, steps, video.name)
                 try:
                     added += len(
                         extract_frames(
@@ -513,11 +576,13 @@ class AnimalAnnotatorWindow(QMainWindow):
         self._grid.frame_activated.connect(self.show_editor)
         self._grid.add_images_requested.connect(self._add_images)
         self._grid.export_requested.connect(self._export)
+        self._grid.train_requested.connect(self._train)
         self._grid.skeleton_requested.connect(self._edit_skeleton)
         self._grid.cancel_requested.connect(self._cancel_extract)
         self._grid.move_requested.connect(self._move_frames)
         self._grid.skip_requested.connect(self._skip_frames)
         self._grid.remove_video_requested.connect(self._remove_video)
+        self._grid.delete_requested.connect(self._delete_frames)
         self._stack = QStackedWidget()
         self._stack.addWidget(self._grid)
         label_page = self._build_label_page()
@@ -601,28 +666,77 @@ class AnimalAnnotatorWindow(QMainWindow):
         self._refresh_undo_buttons()
         self._refresh_all()
 
+    def _delete_frames(self, rows: list, *, confirm: bool = True) -> None:
+        """Delete frames and their labels from disk, after asking. Not undoable."""
+        if self._project is None or self._thread is not None:
+            return
+        frames = [self._project.frames[r] for r in rows if 0 <= r < len(self._project.frames)]
+        if not frames:
+            return
+        labelled = sum(1 for f in frames if self._project.is_labelled(f))
+        what = f"{len(frames)} images" if len(frames) > 1 else "this image"
+        text = f"Delete {what} from the project?"
+        if labelled:
+            text += f"\n\n{labelled} of them {'are' if labelled > 1 else 'is'} annotated; "
+            text += "the annotations go too."
+        text += "\n\nThis can't be undone. Source videos and image files are not touched."
+        if confirm:
+            box = QMessageBox(QMessageBox.Icon.Warning, "Delete images", text, parent=self)
+            delete = box.addButton("Delete", QMessageBox.ButtonRole.DestructiveRole)
+            box.addButton(QMessageBox.StandardButton.Cancel)
+            box.setDefaultButton(QMessageBox.StandardButton.Cancel)
+            box.exec()
+            if box.clickedButton() is not delete:
+                return
+        self._save_current_frame()
+        self._project.remove_frames({f.name for f in frames})
+        try:
+            self._project.save()
+        except OSError as e:
+            QMessageBox.warning(self, "Save project", f"Could not save the project: {e}")
+        self._frame_index = -1
+        self._history.clear()  # edits index into project.frames, which just shifted
+        self._refresh_undo_buttons()
+        self._gallery.clearSelection()
+        self._refresh_all()
+        self._grid.status_text.setText(f"Deleted {len(frames)} image(s).")
+
     def _add_images(self) -> None:
         if self._project is None or self._thread is not None:
             return
         dialog = AddImagesDialog(self._project, parent=self)
-        if dialog.exec() == QDialog.DialogCode.Accepted and dialog.videos:
-            self.extract(dialog.videos, dialog.per_video, dialog.method)
+        if dialog.exec() == QDialog.DialogCode.Accepted and (dialog.videos or dialog.images):
+            self.extract(dialog.videos, dialog.per_video, dialog.method, images=dialog.images)
 
-    def extract(self, videos: list[Path], per_video: int, method: str) -> None:
-        """Pull ``per_video`` frames from each of ``videos`` in the background."""
-        if self._project is None or self._thread is not None or not videos:
+    def extract(
+        self,
+        videos: list[Path],
+        per_video: int,
+        method: str,
+        images: list[Path] | None = None,
+    ) -> None:
+        """Copy in ``images`` and pull ``per_video`` frames from each of ``videos``,
+        in the background."""
+        images = list(images or [])
+        if self._project is None or self._thread is not None or not (videos or images):
             return
-        missing = [v for v in videos if not Path(v).exists()]
+        missing = [v for v in [*videos, *images] if not Path(v).exists()]
         if missing:
             QMessageBox.warning(
                 self,
-                "Video not found",
-                "These videos can't be found (moved, or on a drive that isn't connected):\n\n"
+                "File not found",
+                "These files can't be found (moved, or on a drive that isn't connected):\n\n"
                 + "\n".join(str(v) for v in missing),
             )
             return
         self._save_current_frame()
-        self._worker = ExtractWorker(self._project, [Path(v) for v in videos], per_video, method)
+        self._worker = ExtractWorker(
+            self._project,
+            [Path(v) for v in videos],
+            per_video,
+            method,
+            images=[Path(i) for i in images],
+        )
         self._thread = QThread(self)
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)
@@ -636,7 +750,7 @@ class AnimalAnnotatorWindow(QMainWindow):
         self._thread.start()
 
     def _on_video_started(self, index: int, count: int, name: str) -> None:
-        self._grid.set_busy(True, f"Video {index + 1} of {count}: {name}")
+        self._grid.set_busy(True, f"{index + 1} of {count}: {name}")
 
     def _on_extract_finished(self, added: int, errors: list) -> None:
         text = f"Added {added} frame(s)."
@@ -683,29 +797,39 @@ class AnimalAnnotatorWindow(QMainWindow):
         rail_layout = QVBoxLayout(rail)
         rail_layout.setContentsMargins(6, 8, 6, 8)
         rail_layout.setSpacing(4)
+        rail_title = QLabel("TOOL")
+        rail_title.setProperty("textRole", "section")
+        rail_title.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        rail_layout.addWidget(rail_title)
         self._mode_group = QButtonGroup(self)
         self._mode_buttons: dict[str, QToolButton] = {}
-        for mode, glyph, tip in (
-            (SEQUENTIAL, "•", "Point by point: click each keypoint in turn"),
-            (SKELETON, "⌖", "Drop skeleton: drop the whole skeleton, then move, tilt and scale it"),
+        for mode, glyph, name, tip in (
+            (SEQUENTIAL, "•", "Points", "Point by point: click each keypoint in turn"),
+            (
+                SKELETON,
+                "⌖",
+                "Skeleton",
+                "Drop skeleton: drop the whole skeleton, then move, tilt and scale it",
+            ),
         ):
-            button = _rail_button(glyph, f"{tip} (M switches)")
+            button = _rail_button(glyph, name, f"{tip} (M switches)")
             button.clicked.connect(lambda _c=False, m=mode: self._set_mode(m))
             self._mode_group.addButton(button)
             self._mode_buttons[mode] = button
             rail_layout.addWidget(button)
         self._tool_group = QButtonGroup(self)
         self._tool_buttons: dict[str, QToolButton] = {}
-        for tool, glyph, tip in (
-            (POLYGON, "⬠", "Polygon: click round the animal to outline it"),
+        for tool, glyph, name, tip in (
+            (POLYGON, "⬠", "Polygon", "Polygon: click round the animal to outline it by hand"),
             (
                 AUTO,
                 "✦",
+                "Auto",
                 "Auto: Segment Anything outlines what you click or box. "
                 "The arrow picks the model; each downloads once, on first use.",
             ),
         ):
-            button = _rail_button(glyph, f"{tip} (M switches)")
+            button = _rail_button(glyph, name, f"{tip} (M switches)")
             button.clicked.connect(lambda _c=False, t=tool: self._set_tool(t))
             self._tool_group.addButton(button)
             self._tool_buttons[tool] = button
@@ -723,6 +847,7 @@ class AnimalAnnotatorWindow(QMainWindow):
             sam_group.addAction(action)
         self._tool_buttons[AUTO].setMenu(sam_menu)
         self._tool_buttons[AUTO].setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
+        self._tool_buttons[AUTO].setProperty("withMenu", True)
         rail_layout.addStretch(1)
         undo_key = QKeySequence(QKeySequence.StandardKey.Undo).toString(
             QKeySequence.SequenceFormat.NativeText
@@ -1098,10 +1223,11 @@ class AnimalAnnotatorWindow(QMainWindow):
             self._split_badge.setText("")
             return
         frame = self._project.frames[self._frame_index]
-        parts = [
-            f"<b>Frame {frame.frame}</b>",
-            Path(self._project.videos.get(frame.video, frame.video)).name,
-        ]
+        where = Path(self._project.videos.get(frame.video, frame.video)).name
+        if frame.source:  # an imported image: its own file name says more than a number
+            parts = [f"<b>{html.escape(frame.source)}</b>", html.escape(where)]
+        else:
+            parts = [f"<b>Frame {frame.frame}</b>", html.escape(where)]
         rows = self._gallery.visible_rows()
         if self._frame_index in rows:
             parts.append(f"{rows.index(self._frame_index) + 1} of {len(rows)}")
@@ -1753,7 +1879,20 @@ class AnimalAnnotatorWindow(QMainWindow):
         )
         if notice := leak_notice(self._project):
             text += "\n\n" + notice
+        text += (
+            "\n\nTo train on it here, use Train Model. Elsewhere: "
+            f'yolo train data="{result.data_yaml}" model=yolo11n-'
+            f"{'seg' if self._project.is_segment else 'pose'}.pt"
+        )
         QMessageBox.information(self, "Export dataset", text)
+
+    def _train(self) -> None:
+        if self._project is None or self._thread is not None:
+            return
+        from glider.gui.animal_annotator.train_dialog import TrainDialog
+
+        self._save_current_frame()
+        TrainDialog(self._project, parent=self).exec()
 
     # ------------------------------------------------------------------
 

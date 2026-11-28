@@ -9,11 +9,22 @@ Supports two distinct modes:
 - Runner Mode: Touch-optimized dashboard for Raspberry Pi (480x800)
 """
 
-from glider.gui.main_window import MainWindow
-from glider.gui.view_manager import ViewManager, ViewMode
-
 __all__ = [
     "MainWindow",
     "ViewManager",
     "ViewMode",
 ]
+
+
+def __getattr__(name: str):
+    # Lazy, like glider/__init__: the splash process imports glider.gui.splash
+    # and must not pay for the main window (and the vision stack under it).
+    if name == "MainWindow":
+        from glider.gui.main_window import MainWindow
+
+        return MainWindow
+    if name in ("ViewManager", "ViewMode"):
+        from glider.gui import view_manager
+
+        return getattr(view_manager, name)
+    raise AttributeError(f"module 'glider.gui' has no attribute {name!r}")

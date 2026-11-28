@@ -315,11 +315,83 @@ def test_leak_notice(qtbot, window, tmp_path):
     grid = window._grid
     grid.move_requested.emit([0, 1], "train")
     grid.move_requested.emit([2, 3], "val")
+    assert grid.notice.isHidden()  # one video: nothing to act on, so nothing said
+    _extract(qtbot, window, [_clip(tmp_path / "b.avi")], per_video=2)
     assert not grid.notice.isHidden()
     assert grid.notice.text() == leak_notice(window._project)
-    assert grid.notice.text().startswith("All frames come from one video")
+    assert grid.notice.text().startswith("a.avi has frames in train and in val/test")
     grid.move_requested.emit([0, 1, 2, 3], "train")
     assert grid.notice.isHidden()
+
+
+def _png(path, value=128):
+    import cv2
+    import numpy as np
+
+    image = np.full((48, 64, 3), value, np.uint8)
+    cv2.imwrite(str(path), image)
+    return path
+
+
+def test_images_are_added_alongside_videos(qtbot, window, tmp_path):
+    project = StudioProject.create(tmp_path / "proj", "Test", MOUSE)
+    window.open_project(project.folder)
+    shots = tmp_path / "shots"
+    shots.mkdir()
+    images = [_png(shots / "cage1.png", 40), _png(shots / "cage2.jpg", 200)]
+    window.extract([_clip(tmp_path / "a.avi")], 2, "uniform", images=images)
+    qtbot.waitUntil(lambda: window._thread is None, timeout=20000)
+    frames = window._project.frames
+    assert sorted(f.source for f in frames if f.source) == ["cage1.png", "cage2.jpg"]
+    assert all(window._project.image_path(f).exists() for f in frames)
+    key = next(f.video for f in frames if f.source)
+    assert window._project.is_image_folder(key)
+    # adding the same images again adds nothing
+    window.extract([], 2, "uniform", images=images)
+    qtbot.waitUntil(lambda: window._thread is None, timeout=20000)
+    assert len(window._project.frames) == len(frames)
+    reloaded = StudioProject.load(project.folder)
+    assert {f.source for f in reloaded.frames} == {"", "cage1.png", "cage2.jpg"}
+
+
+def test_search_filters_the_grid(qtbot, window, tmp_path):
+    project = StudioProject.create(tmp_path / "proj", "Test", MOUSE)
+    window.open_project(project.folder)
+    shots = tmp_path / "shots"
+    shots.mkdir()
+    window.extract([_clip(tmp_path / "a.avi")], 2, "uniform", images=[_png(shots / "rearing.png")])
+    qtbot.waitUntil(lambda: window._thread is None, timeout=20000)
+    grid = window._grid
+    grid.search.setText("rearing")
+    rows = grid.gallery.visible_rows()
+    assert [window._project.frames[r].source for r in rows] == ["rearing.png"]
+    assert not grid.all_chip.isChecked()
+    grid.search.setText("a.avi")
+    assert len(grid.gallery.visible_rows()) == 2
+    grid.all_chip.click()
+    assert grid.search.text() == ""
+    assert len(grid.gallery.visible_rows()) == 3
+
+
+def test_rail_tools_are_named(window):
+    names = [b.text() for b in window._mode_buttons.values()]
+    assert names == ["Points", "Skeleton"]
+    assert [b.text() for b in window._tool_buttons.values()] == ["Polygon", "Auto"]
+
+
+def test_train_dialog_needs_annotations_and_builds_args(qtbot, tmp_path):
+    from glider.gui.animal_annotator.train_dialog import TrainDialog, base_model
+
+    project = StudioProject.create(tmp_path / "proj", "Test", MOUSE)
+    dialog = TrainDialog(project)
+    qtbot.addWidget(dialog)
+    assert not dialog._start_btn.isEnabled()
+    assert base_model(project, "n") == "yolo11n-pose.pt"
+    args = dialog.train_args(tmp_path / "data.yaml", "run1")
+    assert args["model"] == "yolo11n-pose.pt"
+    assert args["epochs"] == 100 and args["imgsz"] == 640
+    assert args["project"] == str(project.folder / "runs")
+    assert "device" not in args
 
 
 def test_open_old_project_migrates_splits(qtbot, window, tmp_path):
@@ -443,6 +515,23 @@ def test_add_images_dialog_lists_project_videos_unticked(qtbot, tmp_path):
     assert dialog.videos == [(tmp_path / "b.avi").resolve()]
     dialog._list.item(0).setCheckState(Qt.CheckState.Checked)
     assert dialog.videos == [tmp_path / "a.avi", (tmp_path / "b.avi").resolve()]
+    dialog.add_paths([str(tmp_path / "c.PNG")])
+    assert dialog.images == [(tmp_path / "c.PNG").resolve()]
+    assert len(dialog.videos) == 2
+
+
+def test_add_images_dialog_hides_image_folders(qtbot, tmp_path):
+    from glider.gui.animal_annotator.add_images import AddImagesDialog
+
+    project = StudioProject.create(tmp_path / "proj", "Test", MOUSE)
+    project.videos["a"] = str(tmp_path / "a.avi")
+    project.videos["shots"] = str(tmp_path / "shots")
+    dialog = AddImagesDialog(project)
+    qtbot.addWidget(dialog)
+    assert dialog._list.count() == 1
+    assert not dialog._ok.isEnabled()
+    dialog.add_paths([str(tmp_path / "x.jpg")])
+    assert dialog._ok.isEnabled() and not dialog._per_video.isEnabled()
 
 
 def test_tools_card_and_menu_open_the_studio(main_window_factory, qtbot):
@@ -539,3 +628,54 @@ def test_removing_a_video_clears_undo(qtbot, window, tmp_path, monkeypatch):
     window._grid.remove_video_requested.emit("a")
     assert not window._history.can_undo
     assert not window._undo_btn.isEnabled()
+
+
+def test_delete_selected_images(qtbot, window, tmp_path):
+    project = StudioProject.create(tmp_path / "proj", "Test", MOUSE)
+    window.open_project(project.folder)
+    shots = tmp_path / "shots"
+    shots.mkdir()
+    window.extract([_clip(tmp_path / "a.avi")], 3, "uniform", images=[_png(shots / "one.png")])
+    qtbot.waitUntil(lambda: window._thread is None, timeout=20000)
+    frames = list(window._project.frames)
+    assert len(frames) == 4
+    window.show_editor(0)
+    window._canvas.place(5, 5)  # frame 0 annotated
+    window.show_grid()
+    doomed = [frames[0], frames[3]]  # an annotated video frame and the only image
+    paths = [window._project.image_path(f) for f in doomed]
+    label = window._project.label_path(frames[0])
+    assert label.exists()
+
+    window._delete_frames([0, 3], confirm=False)
+
+    names = [f.name for f in window._project.frames]
+    assert names == [frames[1].name, frames[2].name]
+    assert not any(p.exists() for p in paths) and not label.exists()
+    assert not any(window._project.is_image_folder(k) for k in window._project.videos)
+    assert [f.name for f in StudioProject.load(project.folder).frames] == names
+    assert window._grid._stats["total"].text() == "2"
+    assert not window._history.can_undo
+
+
+def test_delete_key_and_bar_button_ask_to_delete_the_selection(qtbot, window, tmp_path):
+    from PyQt6.QtCore import Qt as _Qt
+
+    project = StudioProject.create(tmp_path / "proj", "Test", MOUSE)
+    window.open_project(project.folder)
+    _extract(qtbot, window, [_clip(tmp_path / "a.avi")], per_video=3)
+    grid = window._grid
+    asked: list[list] = []
+    grid.delete_requested.disconnect()  # the window's handler would open a modal box
+    grid.delete_requested.connect(asked.append)
+    model = grid.gallery.gallery_model
+    grid.gallery.selectionModel().select(
+        model.index(1), grid.gallery.selectionModel().SelectionFlag.Select
+    )
+    grid.gallery.selectionModel().select(
+        model.index(2), grid.gallery.selectionModel().SelectionFlag.Select
+    )
+    assert not grid.selection_bar.isHidden()
+    grid.delete_btn.click()
+    qtbot.keyClick(grid.gallery, _Qt.Key.Key_Delete)
+    assert asked == [[1, 2], [1, 2]]

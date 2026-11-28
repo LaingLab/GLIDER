@@ -977,3 +977,20 @@ def test_the_builder_layout_survives_a_restart(qtbot, main_window_factory, tmp_p
     second.show()
     assert not second._builder_view.left.expanded
     assert second._builder_view.right.current_key() == "camera"
+
+
+def test_board_drop_dialog_does_not_spin_a_nested_event_loop(qtbot, main_window_factory):
+    """It is reached from inside an asyncio task step (a board write noticing
+    the drop). exec() there makes asyncio refuse to step every other task --
+    the flow, the pause, the recorder -- which is the reported unplug "crash".
+    Returning at all proves no nested loop: exec() would block this test."""
+    from PyQt6.QtWidgets import QDialog
+
+    window = _builder(main_window_factory)
+    window._show_hardware_disconnection_dialog("a", BoardConnectionState.DISCONNECTED)
+
+    dialogs = [
+        d for d in window.findChildren(QDialog) if d.windowTitle() == "Hardware Disconnected"
+    ]
+    assert dialogs and dialogs[0].isVisible()
+    dialogs[0].reject()

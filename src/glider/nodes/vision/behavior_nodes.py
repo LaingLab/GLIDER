@@ -26,6 +26,7 @@ import asyncio
 import logging
 from typing import Any
 
+from glider.core.flow_loop import post_to_loop
 from glider.core.live_signals import BehaviorEvent
 from glider.nodes.base_node import (
     InterfaceNode,
@@ -231,6 +232,16 @@ class BehaviorInputNode(InterfaceNode):
         self._subscribed = False
 
     # -- frame handling ---------------------------------------------------
+    def _post_output(self, index: int, value) -> None:
+        """Set an output on the flow's loop: this runs on the vision thread.
+
+        Data outputs propagate into downstream nodes synchronously, so they
+        must not run on the vision thread. Posted in order with the exec
+        outputs, which go through the same loop queue.
+        """
+        if not post_to_loop(self._main_loop, self.set_output, index, value):
+            self.set_output(index, value)
+
     def handle_behavior_event(self, event: BehaviorEvent) -> None:
         """Called once per classified frame, from the vision thread."""
         if (event.animal or "") != self._animal:
@@ -242,7 +253,7 @@ class BehaviorInputNode(InterfaceNode):
         label = (event.behavior or "").strip()
 
         self._last_behavior = label
-        self.set_output(1, label)
+        self._post_output(1, label)
 
         if not self._target_behavior:
             return
@@ -261,11 +272,11 @@ class BehaviorInputNode(InterfaceNode):
 
         if not self._active and self._match_run >= self._min_frames:
             self._active = True
-            self.set_output(0, True)
+            self._post_output(0, True)
             self._dispatch_exec("On Enter")
         elif self._active and self._miss_run >= self._min_frames:
             self._active = False
-            self.set_output(0, False)
+            self._post_output(0, False)
             self._dispatch_exec("On Exit")
 
     def _dispatch_exec(self, port_name: str) -> None:

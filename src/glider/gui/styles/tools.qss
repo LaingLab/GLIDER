@@ -303,25 +303,32 @@ QLabel#StatusPill[state="error"] {
     border-color: rgba(248, 113, 113, 0.45);
 }
 
-QLabel#StepChip {
-    border-radius: @RADIUS_SMALL@;
-    padding: 3px 10px;
-    font-size: 12px;
-    font-weight: 600;
-    background-color: #151c25;
+/* Step progress on a single-page tool (Batch Pose): drawn like the
+   Behavior Analysis step tabs below -- same bar, badges and underline. */
+QFrame#StepStrip {
+    background-color: #0b0f14;
+    border: none;
+    border-bottom: 1px solid #1e2530;
+}
+
+QFrame#StepItem {
+    background-color: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+}
+
+QFrame#StepItem[state="current"] {
+    border-bottom: 2px solid #38bdf8;
+}
+
+QLabel#StepTitle {
+    background-color: transparent;
     color: #718096;
-    border: 1px solid #1e2530;
+    font-weight: 500;
 }
 
-QLabel#StepChip[state="current"] {
-    background-color: rgba(56, 189, 248, 0.14);
-    color: #38bdf8;
-    border-color: rgba(56, 189, 248, 0.45);
-}
-
-QLabel#StepChip[state="done"] {
-    color: #34d399;
-    border-color: rgba(52, 211, 153, 0.45);
+QLabel#StepTitle[state="current"] {
+    color: #e2e8f0;
 }
 
 /* === Inputs ========================================================== */
@@ -651,12 +658,29 @@ QTabBar::tab:hover:!selected {
 }
 
 /* Behavior Analysis step strip: the number (or tick) beside each tab title. */
+QTabWidget#StepTabs > QTabBar {
+    background-color: #0b0f14;
+    border: none;
+    border-bottom: 1px solid #1e2530;
+}
+
+QTabWidget#StepTabs > QTabBar::tab,
+QTabWidget#StepTabs > QTabBar::tab:selected,
+QTabWidget#StepTabs > QTabBar::tab:hover {
+    background-color: transparent;
+    border-radius: 0;
+    margin: 0px;
+}
+
 QTabWidget#StepTabs > QTabBar::tab {
     padding-left: 8px;
 }
 
-QLabel#StepNumber {
+QTabWidget#StepTabs QLabel#StepNumber {
     margin-left: 10px;
+}
+
+QLabel#StepNumber {
     border-radius: 9px;  /* geometric */
     font-size: 11px;
     font-weight: 600;

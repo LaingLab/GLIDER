@@ -15,6 +15,7 @@ from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMenu,
     QProgressBar,
     QPushButton,
@@ -93,6 +94,7 @@ class GridPage(QWidget):
     frame_activated = pyqtSignal(int)
     add_images_requested = pyqtSignal()
     export_requested = pyqtSignal()
+    train_requested = pyqtSignal()
     skeleton_requested = pyqtSignal()
     cancel_requested = pyqtSignal()
     #: rows, split
@@ -101,6 +103,8 @@ class GridPage(QWidget):
     skip_requested = pyqtSignal(list, bool)
     #: video key
     remove_video_requested = pyqtSignal(str)
+    #: rows to delete, images and labels
+    delete_requested = pyqtSignal(list)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -143,14 +147,24 @@ class GridPage(QWidget):
         self.skeleton_btn.setToolTip("Rename, recolour and rearrange this project's keypoints")
         self.skeleton_btn.clicked.connect(self.skeleton_requested)
         header.addWidget(self.skeleton_btn)
-        self.add_btn = secondary(QPushButton("Add Images…"))
-        self.add_btn.setToolTip("Pull frames worth labelling out of your videos")
+        self.add_btn = secondary(QPushButton("Add Images / Videos…"))
+        self.add_btn.setToolTip(
+            "Add image files as they are, or pull frames worth labelling out of videos"
+        )
         self.add_btn.clicked.connect(self.add_images_requested)
         header.addWidget(self.add_btn)
-        self.export_btn = QPushButton("Export Dataset")
-        self.export_btn.setToolTip("Write data.yaml and the train/val/test lists for Ultralytics")
+        self.export_btn = secondary(QPushButton("Export Dataset"))
+        self.export_btn.setToolTip(
+            "Write data.yaml and the train/val/test lists, to train with Ultralytics yourself"
+        )
         self.export_btn.clicked.connect(self.export_requested)
         header.addWidget(self.export_btn)
+        self.train_btn = QPushButton("Train Model…")
+        self.train_btn.setToolTip(
+            "Export the annotated images and train a YOLO model on them, here in GLIDER"
+        )
+        self.train_btn.clicked.connect(self.train_requested)
+        header.addWidget(self.train_btn)
         layout.addLayout(header)
 
         # stats strip
@@ -208,6 +222,14 @@ class GridPage(QWidget):
         self.video_btn.setMenu(self.video_menu)
         chips.addWidget(self.video_btn)
         chips.addStretch(1)
+        self.search = QLineEdit()
+        self.search.setProperty("studioSearch", True)
+        self.search.setPlaceholderText("Search images…")
+        self.search.setToolTip("Match a file name, video name or frame number (e.g. f120)")
+        self.search.setClearButtonEnabled(True)
+        self.search.setFixedWidth(220)
+        self.search.textChanged.connect(self._on_search)
+        chips.addWidget(self.search)
         layout.addLayout(chips)
 
         self.notice = QLabel()
@@ -229,11 +251,11 @@ class GridPage(QWidget):
         empty_layout = QVBoxLayout(empty)
         empty_layout.addStretch(1)
         empty_layout.addWidget(
-            muted(QLabel("No images yet. Add videos and pull frames from them to start.")),
+            muted(QLabel("No images yet. Add image files, or pull frames from videos, to start.")),
             0,
             Qt.AlignmentFlag.AlignHCenter,
         )
-        self.empty_add_btn = QPushButton("Add Images…")
+        self.empty_add_btn = QPushButton("Add Images / Videos…")
         self.empty_add_btn.clicked.connect(self.add_images_requested)
         empty_layout.addWidget(self.empty_add_btn, 0, Qt.AlignmentFlag.AlignHCenter)
         empty_layout.addStretch(1)
@@ -260,8 +282,18 @@ class GridPage(QWidget):
             button.clicked.connect(lambda _c=False, k=skipped: self._skip(k))
             self._bulk_buttons.append(button)
             bar.addWidget(button)
+        self.delete_btn = secondary(QPushButton("Delete…"))
+        self.delete_btn.setProperty("danger", True)
+        self.delete_btn.setToolTip("Delete the selected images and their labels (Delete key)")
+        self.delete_btn.clicked.connect(self._delete)
+        self._bulk_buttons.append(self.delete_btn)
+        bar.addWidget(self.delete_btn)
         self.selection_bar.setVisible(False)
         layout.addWidget(self.selection_bar)
+
+        self.gallery.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.gallery.customContextMenuRequested.connect(self._context_menu)
+        self.gallery.delete_pressed.connect(self._delete)
 
         self.set_project(None)
 
@@ -278,6 +310,10 @@ class GridPage(QWidget):
     def set_project(self, project: StudioProject | None) -> None:
         self._project = project
         self._status = self._split = self._video = None
+        self.search.blockSignals(True)
+        self.search.clear()
+        self.search.blockSignals(False)
+        self.gallery.set_search("")
         self.gallery.set_project(project)
         self.gallery.empty_text = (
             "No images yet.\n\nAdd videos and extract frames to start labelling."
@@ -330,7 +366,7 @@ class GridPage(QWidget):
         self._split_bar.update()
         self._split_text.setText(
             " &nbsp;".join(
-                f"<span style='color:{_SPLIT_COLOUR[s]}'>■</span> {s.capitalize()} {splits[s]}"
+                f"<span style='color:{_SPLIT_COLOUR[s]}'>●</span> {s.capitalize()} {splits[s]}"
                 for s in SPLITS
             )
         )
@@ -354,6 +390,7 @@ class GridPage(QWidget):
             self.add_btn,
             self.empty_add_btn,
             self.export_btn,
+            self.train_btn,
             self.skeleton_btn,
             self.video_btn,
             *self._bulk_buttons,
@@ -382,6 +419,11 @@ class GridPage(QWidget):
     def _clear_filters(self) -> None:
         self._status = self._split = self._video = None
         self._rebuild_video_menu()
+        self.search.clear()  # re-applies the filter through _on_search
+        self._apply_filter()
+
+    def _on_search(self, text: str) -> None:
+        self.gallery.set_search(text)
         self._apply_filter()
 
     def _set_video(self, key: str | None) -> None:
@@ -394,7 +436,12 @@ class GridPage(QWidget):
             chip.setChecked(status == self._status)
         for split, chip in self.split_chips.items():
             chip.setChecked(split == self._split)
-        self.all_chip.setChecked(self._status is None and self._split is None and not self._video)
+        self.all_chip.setChecked(
+            self._status is None
+            and self._split is None
+            and not self._video
+            and not self.gallery.search_text
+        )
         self.gallery.set_filter(self._status, self._split, self._video)
         self._update_selection_bar()
 
@@ -403,7 +450,15 @@ class GridPage(QWidget):
         menu.clear()
         videos = self._project.videos if self._project else {}
         group = QActionGroup(menu)
-        for key, label in ((None, "All videos"), *((k, Path(p).name) for k, p in videos.items())):
+
+        def label_for(key: str, path: str) -> str:
+            folder = self._project is not None and self._project.is_image_folder(key)
+            return f"{Path(path).name} (images)" if folder else Path(path).name
+
+        for key, label in (
+            (None, "All videos"),
+            *((k, label_for(k, p)) for k, p in videos.items()),
+        ):
             action = QAction(label, menu)
             action.setCheckable(True)
             action.setChecked(key == self._video)
@@ -433,3 +488,34 @@ class GridPage(QWidget):
         rows = self.gallery.selected_rows()
         if rows:
             self.skip_requested.emit(rows, skipped)
+
+    def _delete(self) -> None:
+        rows = self.gallery.selected_rows()
+        if rows and not self._busy and self._project is not None:
+            self.delete_requested.emit(rows)
+
+    def _context_menu(self, pos) -> None:
+        """Right-click: act on the selection, or on the tile under the cursor if it isn't in it."""
+        if self._busy or self._project is None:
+            return
+        index = self.gallery.indexAt(pos)
+        if not index.isValid():
+            return
+        if not self.gallery.selectionModel().isSelected(index):
+            self.gallery.setCurrentIndex(index)  # selects only that tile
+        rows = self.gallery.selected_rows()
+        if not rows:
+            return
+        noun = f"{len(rows)} images" if len(rows) > 1 else "image"
+        menu = QMenu(self.gallery)
+        if len(rows) == 1:
+            menu.addAction("Open", lambda: self.frame_activated.emit(rows[0]))
+            menu.addSeparator()
+        for split in SPLITS:
+            menu.addAction(f"Move to {split.capitalize()}", lambda s=split: self._move(s))
+        menu.addSeparator()
+        menu.addAction("Skip", lambda: self._skip(True))
+        menu.addAction("Unskip", lambda: self._skip(False))
+        menu.addSeparator()
+        menu.addAction(f"Delete {noun}…", self._delete)
+        menu.exec(self.gallery.viewport().mapToGlobal(pos))

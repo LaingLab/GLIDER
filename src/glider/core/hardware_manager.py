@@ -10,6 +10,7 @@ import logging
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
+from glider.core.flow_loop import call_on_flow_loop, estop_entry, wrap_public_coroutines
 from glider.hal.base_board import BaseBoard, BoardConnectionState
 from glider.hal.base_device import BaseDevice, create_device_from_dict
 from glider.hal.pin_manager import PinConflictError, PinManager
@@ -288,6 +289,9 @@ class HardwareManager:
         success = await board.connect()
 
         self._notify_connection_change(board_id, board.state)
+        # Every connect path comes through here, so this is the one place
+        # that guarantees an unplug is noticed on an idle rig. Idempotent.
+        self.start_link_supervisor()
         return success
 
     async def disconnect_board(self, board_id: str) -> None:
@@ -708,6 +712,7 @@ class HardwareManager:
                 results[device_id] = False
         return results
 
+    @estop_entry
     async def emergency_stop(self) -> None:
         """
         Trigger emergency stop on all hardware.
@@ -782,6 +787,20 @@ class HardwareManager:
             except Exception as e:  # noqa: BLE001 - one bad device, not a sweep
                 logger.debug("Link poll failed for device %s: %s", device_id, e)
 
+    def poll_board_links(self) -> None:
+        """Read every board's ``is_connected`` once.
+
+        TelemetrixBoard only notices an unplugged Arduino when ``is_connected``
+        is read (the serial reader task has died); until then it reported
+        CONNECTED forever on an idle rig. Reading it fires the state change.
+        """
+        for board_id, board in list(self._boards.items()):
+            try:
+                board.is_connected  # noqa: B018 - the read is the poll
+            except Exception as e:  # noqa: BLE001 - one bad board, not a sweep
+                logger.debug("Link poll failed for board %s: %s", board_id, e)
+
+    @call_on_flow_loop
     def start_link_supervisor(self) -> None:
         """Begin polling device links on a timer. Idempotent.
 
@@ -815,6 +834,7 @@ class HardwareManager:
             except asyncio.CancelledError:
                 return
             try:
+                self.poll_board_links()
                 await self.poll_device_links()
             except asyncio.CancelledError:
                 raise
@@ -880,3 +900,7 @@ def _register_builtin_drivers():
 
 
 _register_builtin_drivers()
+
+
+# Every public coroutine runs on the flow loop when it is on (core/flow_loop.py).
+wrap_public_coroutines(HardwareManager)

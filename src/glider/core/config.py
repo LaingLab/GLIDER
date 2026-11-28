@@ -43,6 +43,11 @@ class TimingConfig:
     # Brief pulse duration for stepper/motor control
     pulse_duration: float = 0.05
 
+    # Run the flow and the hardware on their own asyncio loop thread instead of
+    # the GUI loop (core/flow_loop.py). Off by default while it is proven on
+    # every board; GLIDER_FLOW_THREAD=1/0 overrides it.
+    flow_loop_thread: bool = False
+
 
 @dataclass
 class UIConfig:
@@ -153,6 +158,7 @@ class GliderConfig:
                 "board_ready_timeout": self.timing.board_ready_timeout,
                 "board_operation_timeout": self.timing.board_operation_timeout,
                 "function_execution_timeout": self.timing.function_execution_timeout,
+                "flow_loop_thread": self.timing.flow_loop_thread,
             },
             "ui": {
                 "min_window_width": self.ui.min_window_width,

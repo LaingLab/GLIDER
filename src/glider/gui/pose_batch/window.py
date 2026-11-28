@@ -44,6 +44,7 @@ from glider.core.experiment_types import ANALYSIS_PUP_RETRIEVAL, has_analysis
 from glider.gui.pose_batch.calibration_table import CalibrationTable
 from glider.gui.qthreads import retire_thread
 from glider.gui.styles import colors
+from glider.gui.widgets.glider_progress import GliderProgress
 from glider.gui.widgets.tool_ui import (
     GUTTER,
     Card,
@@ -103,6 +104,11 @@ class _Sources:
 class _StepStrip(QFrame):
     """Model -> Videos -> Arenas -> Track, with the first unfinished step lit.
 
+    Drawn like Behavior Analysis's step tabs -- a numbered badge (a tick once
+    done) beside each title, the current step underlined -- so every
+    step-by-step tool reads the same. Here it is one page, so the steps are
+    progress, not tabs to click.
+
     Display only: the window's validation decides what is done and hands the
     counts in, so this can never disagree with what the Track button allows.
     """
@@ -114,13 +120,28 @@ class _StepStrip(QFrame):
         self.setObjectName("StepStrip")
         row = QHBoxLayout(self)
         row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(8)
-        self._chips = []
-        for name in self._NAMES:
-            chip = QLabel(name)
-            chip.setObjectName("StepChip")
-            self._chips.append(chip)
-            row.addWidget(chip)
+        row.setSpacing(0)
+        self._items: list[QFrame] = []
+        self._badges: list[QLabel] = []
+        self._chips: list[QLabel] = []
+        for i, name in enumerate(self._NAMES):
+            item = QFrame()
+            item.setObjectName("StepItem")
+            inner = QHBoxLayout(item)
+            inner.setContentsMargins(10, 9, 18, 9)
+            inner.setSpacing(8)
+            badge = QLabel(str(i + 1))
+            badge.setObjectName("StepNumber")
+            badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            badge.setFixedSize(18, 18)
+            title = QLabel(name)
+            title.setObjectName("StepTitle")
+            inner.addWidget(badge)
+            inner.addWidget(title)
+            self._items.append(item)
+            self._badges.append(badge)
+            self._chips.append(title)
+            row.addWidget(item)
         row.addStretch(1)
         self._current = 0
         self._tracking: tuple[int, int] | None = None
@@ -135,25 +156,32 @@ class _StepStrip(QFrame):
         self._last = {"model_ok": model_ok, "videos": videos, "arenas": arenas}
         arenas_ok = videos > 0 and arenas == videos
         done = [model_ok, videos > 0, arenas_ok, False]
+        # The badge carries the tick, so the titles only add counts.
         texts = [
-            "Model ✓" if model_ok else "Model",
-            f"Videos · {videos} ✓" if videos else "Videos",
-            (
-                (f"Arenas · {arenas} of {videos}" + (" ✓" if arenas_ok else ""))
-                if videos
-                else "Arenas"
-            ),
+            "Model",
+            f"Videos · {videos}" if videos else "Videos",
+            f"Arenas · {arenas} of {videos}" if videos else "Arenas",
             f"Tracking {self._tracking[0]} of {self._tracking[1]}" if self._tracking else "Track",
         ]
         self._current = next((i for i, d in enumerate(done) if not d), len(done) - 1)
         if self._tracking:
             self._current = len(done) - 1
-        for i, (chip, text) in enumerate(zip(self._chips, texts, strict=True)):
-            chip.setText(text)
-            state = "done" if done[i] else ("current" if i == self._current else "todo")
-            chip.setProperty("state", state)
-            chip.style().unpolish(chip)
-            chip.style().polish(chip)
+        for i, text in enumerate(texts):
+            self._chips[i].setText(text)
+            self._badges[i].setText("✓" if done[i] else str(i + 1))
+            badge_state = "done" if done[i] else ("current" if i == self._current else "")
+            for widget, state in (
+                (self._badges[i], badge_state),
+                (self._chips[i], "current" if i == self._current else ""),
+                (self._items[i], "current" if i == self._current else ""),
+            ):
+                widget.setProperty("state", state)
+                widget.style().unpolish(widget)
+                widget.style().polish(widget)
+
+    def done(self) -> list[bool]:
+        """Which steps show a tick."""
+        return [badge.text() == "✓" for badge in self._badges]
 
     def steps_text(self) -> list[str]:
         return [chip.text() for chip in self._chips]
@@ -267,10 +295,7 @@ class PoseBatchWindow(QMainWindow):
         self._remove_all_action.setEnabled(False)
         self._remove_all_action.triggered.connect(lambda: self._remove_all())
 
-        self._header = ToolHeader(
-            "Batch Pose Tracking",
-            "Run a YOLO-pose model over folders of video and write a DLC CSV beside each one",
-        )
+        self._header = ToolHeader("Batch Pose Tracking")
         page.addWidget(self._header)
 
         self._tour = None
@@ -304,11 +329,9 @@ class PoseBatchWindow(QMainWindow):
         self._more_button.setMenu(more_menu)
         self._header.add_action(self._more_button)
 
+        # Full width under the header, like Behavior Analysis's step tabs.
         self._steps = _StepStrip()
-        strip = QHBoxLayout()
-        strip.setContentsMargins(GUTTER, GUTTER, GUTTER, 0)
-        strip.addWidget(self._steps)
-        page.addLayout(strip)
+        page.addWidget(self._steps)
 
         # --- configuration, full width ------------------------------------
         area, column = scroll_column()
@@ -371,7 +394,7 @@ class PoseBatchWindow(QMainWindow):
         self._video_bar = QProgressBar()
         self._video_bar.setFormat("%v / %m frames")
         panel.addWidget(self._video_bar)
-        self._overall_bar = QProgressBar()
+        self._overall_bar = GliderProgress()
         self._overall_bar.setFormat("%v / %m videos")
         panel.addWidget(self._overall_bar)
         self._progress_panel.setVisible(False)
